@@ -2,7 +2,7 @@ import Foundation
 import os
 
 class GroqTranscriptionService {
-    private let logger = Logger(subsystem: "com.prakashjoshipax.voiceink", category: "GroqService")
+    private let logger = Logger(subsystem: "com.metrovoc.voiceink", category: "GroqService")
     private let baseTimeout: TimeInterval = 120
     private let maxRetries: Int = 2
     private let initialRetryDelay: TimeInterval = 1.0

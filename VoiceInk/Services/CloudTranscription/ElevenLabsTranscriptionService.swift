@@ -3,7 +3,7 @@ import OSLog
 
 class ElevenLabsTranscriptionService {
     private let apiURL = URL(string: "https://api.elevenlabs.io/v1/speech-to-text")!
-    private let logger = Logger(subsystem: "com.prakashjoshipax.voiceink", category: "ElevenLabsTranscriptionService")
+    private let logger = Logger(subsystem: "com.metrovoc.voiceink", category: "ElevenLabsTranscriptionService")
     
     func transcribe(audioURL: URL, model: any TranscriptionModel) async throws -> String {
         guard let apiKey = APIKeyManager.shared.getAPIKey(forProvider: "ElevenLabs"), !apiKey.isEmpty else {
