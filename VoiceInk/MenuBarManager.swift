@@ -4,7 +4,7 @@ import AppKit
 import OSLog
 
 class MenuBarManager: ObservableObject {
-    private let logger = Logger(subsystem: "com.prakashjoshipax.voiceink", category: "MenuBarManager")
+    private let logger = Logger(subsystem: "com.metrovoc.voiceink", category: "MenuBarManager")
     @Published var isMenuBarOnly: Bool {
         didSet {
             UserDefaults.standard.set(isMenuBarOnly, forKey: "IsMenuBarOnly")
