@@ -65,7 +65,7 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
-			shellScript = "if [ \"$CONFIGURATION\" = \"Debug\" ]; then\n    APP_NAME=\"VoiceInk-Dev.app\"\n    DEST=\"/Applications/$APP_NAME\"\n    SRC=\"${BUILT_PRODUCTS_DIR}/VoiceInk.app\"\n    \n    # Verify source app is complete\n    if [ ! -f \"$SRC/Contents/MacOS/VoiceInk\" ]; then\n        echo \"Source app not ready, skipping deploy\"\n        exit 0\n    fi\n    \n    # Kill running instance\n    pkill -x \"VoiceInk-Dev\" 2>/dev/null || true\n    sleep 0.5\n    \n    # Remove old version\n    rm -rf \"$DEST\"\n    \n    # Copy new version\n    cp -R \"$SRC\" \"$DEST\"\n    \n    # Remove quarantine\n    xattr -cr \"$DEST\"\n    \n    echo \"Deployed to $DEST\"\nfi\n";
+			shellScript = "if [ \"$CONFIGURATION\" = \"Debug\" ]; then\n    APP_NAME=\"VoiceInk-Dev.app\"\n    DEST=\"/Applications/$APP_NAME\"\n    SRC=\"${BUILT_PRODUCTS_DIR}/VoiceInk.app\"\n    TEMP_DEST=\"/Applications/.VoiceInk-Dev-temp.app\"\n    \n    # Verify source app is complete\n    if [ ! -f \"$SRC/Contents/MacOS/VoiceInk\" ]; then\n        echo \"Source app not ready, skipping deploy\"\n        exit 0\n    fi\n    \n    # Kill running instance\n    pkill -x \"VoiceInk-Dev\" 2>/dev/null || true\n    sleep 0.5\n    \n    # Cleanup any temp files\n    rm -rf \"$TEMP_DEST\"\n    \n    # Copy to temp location first\n    if ! cp -R \"$SRC\" \"$TEMP_DEST\"; then\n        echo \"Failed to copy app, aborting\"\n        rm -rf \"$TEMP_DEST\"\n        exit 1\n    fi\n    \n    # Remove quarantine from temp\n    xattr -cr \"$TEMP_DEST\"\n    \n    # Atomic swap: remove old and move temp to final\n    rm -rf \"$DEST\"\n    mv \"$TEMP_DEST\" \"$DEST\"\n    \n    echo \"Deployed to $DEST\"\nfi\n";
 		};
 /* End PBXShellScriptBuildPhase section */
 
@@ -395,7 +395,7 @@
 				DEBUG_INFORMATION_FORMAT = dwarf;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
 				ENABLE_TESTABILITY = YES;
-				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				GCC_C_LANGUAGE_STANDARD = gnu17;
 				GCC_DYNAMIC_NO_PIC = NO;
 				GCC_NO_COMMON_BLOCKS = YES;
@@ -458,7 +458,7 @@
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
 				ENABLE_NS_ASSERTIONS = NO;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
-				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				GCC_C_LANGUAGE_STANDARD = gnu17;
 				GCC_NO_COMMON_BLOCKS = YES;
 				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
