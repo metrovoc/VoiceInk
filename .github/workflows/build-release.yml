@@ -14,18 +14,15 @@ permissions:
 
 jobs:
   build:
-    runs-on: macos-15
+    runs-on: macos-26
     steps:
       - uses: actions/checkout@v4
 
-      - name: Select Xcode 16
-        run: sudo xcode-select -s /Applications/Xcode_16.2.app/Contents/Developer
-
-      - name: Get whisper.cpp latest commit
+      - name: Get whisper.cpp latest release tag
         id: whisper-version
         run: |
-          WHISPER_SHA=$(gh api repos/ggerganov/whisper.cpp/commits/HEAD --jq '.sha[:8]')
-          echo "sha=$WHISPER_SHA" >> $GITHUB_OUTPUT
+          WHISPER_TAG=$(gh api repos/ggerganov/whisper.cpp/releases/latest --jq '.tag_name')
+          echo "tag=$WHISPER_TAG" >> $GITHUB_OUTPUT
         env:
           GH_TOKEN: ${{ github.token }}
 
@@ -34,14 +31,14 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ${{ github.workspace }}/../VoiceInk-Dependencies/whisper.cpp
-          key: whisper-xcframework-${{ steps.whisper-version.outputs.sha }}
+          key: whisper-xcframework-${{ steps.whisper-version.outputs.tag }}
 
       - name: Build whisper.cpp xcframework
         if: steps.cache-whisper.outputs.cache-hit != 'true'
         run: |
           mkdir -p "$GITHUB_WORKSPACE/../VoiceInk-Dependencies"
           cd "$GITHUB_WORKSPACE/../VoiceInk-Dependencies"
-          git clone --depth 1 https://github.com/ggerganov/whisper.cpp.git
+          git clone --depth 1 --branch ${{ steps.whisper-version.outputs.tag }} https://github.com/ggerganov/whisper.cpp.git
           cd whisper.cpp
           ./build-xcframework.sh
 
