@@ -45,6 +45,16 @@ jobs:
           cd whisper.cpp
           ./build-xcframework.sh
 
+      - name: Determine version
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            VERSION="${{ github.event.inputs.version }}"
+          else
+            VERSION="${GITHUB_REF_NAME#v}"
+          fi
+          echo "VERSION=$VERSION" >> $GITHUB_ENV
+          echo "BUILD_NUM=${VERSION//./}" >> $GITHUB_ENV
+
       - name: Build VoiceInk
         run: |
           xcodebuild -project VoiceInk.xcodeproj \
@@ -53,7 +63,9 @@ jobs:
             -derivedDataPath build \
             CODE_SIGN_IDENTITY="-" \
             CODE_SIGNING_REQUIRED=NO \
-            CODE_SIGNING_ALLOWED=NO
+            CODE_SIGNING_ALLOWED=NO \
+            MARKETING_VERSION="$VERSION" \
+            CURRENT_PROJECT_VERSION="$BUILD_NUM"
 
       - name: Create DMG
         run: |
@@ -82,16 +94,6 @@ jobs:
           SIGNATURE=$(/tmp/sparkle/bin/sign_update VoiceInk.dmg -f /tmp/sparkle_private_key | grep "sparkle:edSignature" | sed 's/.*sparkle:edSignature="\([^"]*\)".*/\1/')
           echo "SPARKLE_SIGNATURE=$SIGNATURE" >> $GITHUB_ENV
           rm /tmp/sparkle_private_key
-
-      - name: Determine version
-        run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            VERSION="${{ github.event.inputs.version }}"
-          else
-            VERSION="${GITHUB_REF_NAME#v}"
-          fi
-          echo "VERSION=$VERSION" >> $GITHUB_ENV
-          echo "BUILD_NUM=${VERSION//./}" >> $GITHUB_ENV
 
       - name: Generate appcast.xml
         run: |
@@ -132,8 +134,9 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
-          # Save appcast.xml
+          # Save appcast.xml and remove from working directory
           cp appcast.xml /tmp/appcast.xml
+          rm appcast.xml
 
           # Switch to gh-pages branch
           git fetch origin gh-pages || true
