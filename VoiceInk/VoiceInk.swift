@@ -47,7 +47,7 @@ struct VoiceInkApp: App {
             UserDefaults.standard.set(hasEnabledPowerModes, forKey: "powerModeUIFlag")
         }
 
-        let logger = Logger(subsystem: "com.prakashjoshipax.voiceink", category: "Initialization")
+        let logger = Logger(subsystem: "com.metrovoc.voiceink", category: "Initialization")
         let schema = Schema([
             Transcription.self,
             VocabularyWord.self,
@@ -101,7 +101,7 @@ struct VoiceInkApp: App {
 
         // 1. Create modelsDirectory URL
         let appSupportDirectory = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("com.prakashjoshipax.VoiceInk")
+            .appendingPathComponent("com.metrovoc.VoiceInk")
         let modelsDirectory = appSupportDirectory.appendingPathComponent("WhisperModels")
 
         // 2. Create model managers
@@ -178,7 +178,7 @@ struct VoiceInkApp: App {
         do {
             // Create app-specific Application Support directory URL
             let appSupportURL = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-                .appendingPathComponent("com.prakashjoshipax.VoiceInk", isDirectory: true)
+                .appendingPathComponent("com.metrovoc.VoiceInk", isDirectory: true)
 
             // Create the directory if it doesn't exist
             try? FileManager.default.createDirectory(at: appSupportURL, withIntermediateDirectories: true)
@@ -201,7 +201,7 @@ struct VoiceInkApp: App {
             #if LOCAL_BUILD
             let dictionaryCloudKit: ModelConfiguration.CloudKitDatabase = .none
             #else
-            let dictionaryCloudKit: ModelConfiguration.CloudKitDatabase = .private("iCloud.com.prakashjoshipax.VoiceInk")
+            let dictionaryCloudKit: ModelConfiguration.CloudKitDatabase = .private("iCloud.com.metrovoc.VoiceInk")
             #endif
             let dictionaryConfig = ModelConfiguration(
                 "dictionary",
@@ -319,7 +319,7 @@ struct VoiceInkApp: App {
                     .environmentObject(enhancementService)
                     .frame(minWidth: 880, minHeight: 780)
                     .background(WindowAccessor { window in
-                        if window.identifier == nil || window.identifier != NSUserInterfaceItemIdentifier("com.prakashjoshipax.voiceink.onboardingWindow") {
+                        if window.identifier == nil || window.identifier != NSUserInterfaceItemIdentifier("com.metrovoc.voiceink.onboardingWindow") {
                             WindowManager.shared.configureOnboardingPanel(window)
                         }
                     })
