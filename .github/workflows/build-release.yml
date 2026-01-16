@@ -71,8 +71,15 @@ jobs:
 
       - name: Create DMG
         run: |
-          APP_PATH="build/Build/Products/Release/VoiceInk.app"
-          hdiutil create -volname VoiceInk -srcfolder "$APP_PATH" -ov -format UDZO VoiceInk.dmg
+          brew install create-dmg
+          create-dmg \
+            --volname "VoiceInk-CE" \
+            --window-size 600 400 \
+            --icon-size 100 \
+            --icon "VoiceInk-CE.app" 150 200 \
+            --app-drop-link 450 200 \
+            VoiceInk-CE.dmg \
+            "build/Build/Products/Release/VoiceInk-CE.app"
 
       - name: Cache Sparkle tools
         id: cache-sparkle
@@ -93,13 +100,13 @@ jobs:
           SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
         run: |
           echo "$SPARKLE_PRIVATE_KEY" > /tmp/sparkle_private_key
-          SIGNATURE=$(/tmp/sparkle/bin/sign_update VoiceInk.dmg -f /tmp/sparkle_private_key | grep "sparkle:edSignature" | sed 's/.*sparkle:edSignature="\([^"]*\)".*/\1/')
+          SIGNATURE=$(/tmp/sparkle/bin/sign_update VoiceInk-CE.dmg -f /tmp/sparkle_private_key | grep "sparkle:edSignature" | sed 's/.*sparkle:edSignature="\([^"]*\)".*/\1/')
           echo "SPARKLE_SIGNATURE=$SIGNATURE" >> $GITHUB_ENV
           rm /tmp/sparkle_private_key
 
       - name: Generate appcast.xml
         run: |
-          SIZE=$(stat -f%z VoiceInk.dmg)
+          SIZE=$(stat -f%z VoiceInk-CE.dmg)
           DATE=$(date -R)
           cat > appcast.xml << 'APPCAST_EOF'
           <?xml version="1.0" standalone="yes"?>
@@ -122,12 +129,12 @@ jobs:
           sed -i '' "s|BUILD_PLACEHOLDER|$BUILD_NUM|g" appcast.xml
           sed -i '' "s|SIZE_PLACEHOLDER|$SIZE|g" appcast.xml
           sed -i '' "s|SIG_PLACEHOLDER|$SPARKLE_SIGNATURE|g" appcast.xml
-          sed -i '' "s|URL_PLACEHOLDER|https://github.com/${{ github.repository }}/releases/download/v$VERSION/VoiceInk.dmg|g" appcast.xml
+          sed -i '' "s|URL_PLACEHOLDER|https://github.com/${{ github.repository }}/releases/download/v$VERSION/VoiceInk-CE.dmg|g" appcast.xml
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: VoiceInk.dmg
+          files: VoiceInk-CE.dmg
           tag_name: v${{ env.VERSION }}
           generate_release_notes: true
 
