@@ -5,7 +5,7 @@ import os
 final class APIKeyManager {
     static let shared = APIKeyManager()
 
-    private let logger = Logger(subsystem: "com.prakashjoshipax.voiceink", category: "APIKeyManager")
+    private let logger = Logger(subsystem: "com.metrovoc.voiceink", category: "APIKeyManager")
     private let keychain = KeychainService.shared
     private let userDefaults = UserDefaults.standard
 
