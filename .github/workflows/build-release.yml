@@ -69,6 +69,14 @@ jobs:
             MARKETING_VERSION="$VERSION" \
             CURRENT_PROJECT_VERSION="$BUILD_NUM"
 
+      - name: Ad-hoc sign the app
+        run: |
+          # Re-sign with proper ad-hoc signature (deep signs all nested frameworks/XPCs)
+          # This fixes Sparkle update validation which fails when resources aren't sealed
+          codesign --deep --force --sign - "build/Build/Products/Release/VoiceInk-CE.app"
+          # Verify the signature is valid
+          codesign --verify --deep --strict --verbose=2 "build/Build/Products/Release/VoiceInk-CE.app"
+
       - name: Create DMG
         run: |
           brew install create-dmg
