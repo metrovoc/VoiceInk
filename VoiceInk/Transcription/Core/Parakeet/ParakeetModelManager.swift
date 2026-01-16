@@ -16,7 +16,7 @@ class ParakeetModelManager: ObservableObject {
     /// can rebuild allAvailableModels.
     var onModelsChanged: (() -> Void)?
 
-    private let logger = Logger(subsystem: "com.prakashjoshipax.voiceink", category: "ParakeetModelManager")
+    private let logger = Logger(subsystem: "com.metrovoc.voiceink", category: "ParakeetModelManager")
 
     init() {}
 
