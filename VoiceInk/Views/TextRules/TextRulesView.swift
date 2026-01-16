@@ -23,7 +23,7 @@ struct TextRulesView: View {
 }
 
 struct TextRulesContentView: View {
-    @Query(sort: \TextRule.priority) private var rules: [TextRule]
+    @Query(sort: \TextRule.dateAdded) private var rules: [TextRule]
     @Environment(\.modelContext) private var modelContext
     @State private var editingRule: TextRule?
     @State private var showAddSheet = false
@@ -163,20 +163,18 @@ struct TextRulesInfoPopover: View {
                 Divider()
 
                 patternExample(
-                    mode: "Whole Word",
-                    pattern: "um",
+                    mode: "Regex",
+                    pattern: "\\b(um|uh)\\b",
                     replacement: "",
-                    description: "Delete filler word (won't match \"umbrella\")"
+                    description: "Delete filler words (\\b = word boundary)"
                 )
 
                 patternExample(
-                    mode: "Whole Word",
-                    pattern: "dont",
+                    mode: "Regex",
+                    pattern: "\\bdont\\b",
                     replacement: "don't",
-                    description: "Fix missing apostrophe"
+                    description: "Fix missing apostrophe (whole word only)"
                 )
-
-                Divider()
 
                 patternExample(
                     mode: "Regex",

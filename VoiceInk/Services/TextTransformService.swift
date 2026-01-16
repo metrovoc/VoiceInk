@@ -9,7 +9,7 @@ class TextTransformService {
     func applyRules(to text: String, using context: ModelContext) -> String {
         let descriptor = FetchDescriptor<TextRule>(
             predicate: #Predicate { $0.isEnabled },
-            sortBy: [SortDescriptor(\.priority, order: .forward)]
+            sortBy: [SortDescriptor(\.dateAdded, order: .forward)]
         )
 
         guard let rules = try? context.fetch(descriptor), !rules.isEmpty else {
@@ -32,24 +32,9 @@ class TextTransformService {
         case .literal:
             return text.replacingOccurrences(of: rule.pattern, with: rule.replacement)
 
-        case .literalWord:
-            return applyWordBoundary(pattern: rule.pattern, replacement: rule.replacement, to: text)
-
         case .regex:
             return applyRegex(pattern: rule.pattern, replacement: rule.replacement, to: text)
         }
-    }
-
-    private func applyWordBoundary(pattern: String, replacement: String, to text: String) -> String {
-        let escaped = NSRegularExpression.escapedPattern(for: pattern)
-        let regexPattern = "\\b\(escaped)\\b"
-
-        guard let regex = try? NSRegularExpression(pattern: regexPattern, options: .caseInsensitive) else {
-            return text
-        }
-
-        let range = NSRange(text.startIndex..., in: text)
-        return regex.stringByReplacingMatches(in: text, options: [], range: range, withTemplate: replacement)
     }
 
     private func applyRegex(pattern: String, replacement: String, to text: String) -> String {
