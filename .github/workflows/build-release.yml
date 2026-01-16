@@ -21,11 +21,25 @@ jobs:
       - name: Select Xcode 16
         run: sudo xcode-select -s /Applications/Xcode_16.2.app/Contents/Developer
 
-      - name: Setup dependencies directory
-        run: mkdir -p ~/VoiceInk-Dependencies
+      - name: Get whisper.cpp latest commit
+        id: whisper-version
+        run: |
+          WHISPER_SHA=$(gh api repos/ggerganov/whisper.cpp/commits/master --jq '.sha[:8]')
+          echo "sha=$WHISPER_SHA" >> $GITHUB_OUTPUT
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+      - name: Cache whisper.cpp xcframework
+        id: cache-whisper
+        uses: actions/cache@v4
+        with:
+          path: ~/VoiceInk-Dependencies/whisper.cpp
+          key: whisper-xcframework-${{ steps.whisper-version.outputs.sha }}
 
       - name: Build whisper.cpp xcframework
+        if: steps.cache-whisper.outputs.cache-hit != 'true'
         run: |
+          mkdir -p ~/VoiceInk-Dependencies
           cd ~/VoiceInk-Dependencies
           git clone --depth 1 https://github.com/ggerganov/whisper.cpp.git
           cd whisper.cpp
@@ -46,17 +60,26 @@ jobs:
           APP_PATH="build/Build/Products/Release/VoiceInk.app"
           hdiutil create -volname VoiceInk -srcfolder "$APP_PATH" -ov -format UDZO VoiceInk.dmg
 
+      - name: Cache Sparkle tools
+        id: cache-sparkle
+        uses: actions/cache@v4
+        with:
+          path: /tmp/sparkle
+          key: sparkle-2.8.0
+
       - name: Download Sparkle tools
+        if: steps.cache-sparkle.outputs.cache-hit != 'true'
         run: |
+          mkdir -p /tmp/sparkle
           curl -L -o /tmp/Sparkle.tar.xz https://github.com/sparkle-project/Sparkle/releases/download/2.8.0/Sparkle-2.8.0.tar.xz
-          tar xf /tmp/Sparkle.tar.xz -C /tmp
+          tar xf /tmp/Sparkle.tar.xz -C /tmp/sparkle
 
       - name: Sign DMG for Sparkle
         env:
           SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
         run: |
           echo "$SPARKLE_PRIVATE_KEY" > /tmp/sparkle_private_key
-          SIGNATURE=$(/tmp/bin/sign_update VoiceInk.dmg -f /tmp/sparkle_private_key | grep "sparkle:edSignature" | sed 's/.*sparkle:edSignature="\([^"]*\)".*/\1/')
+          SIGNATURE=$(/tmp/sparkle/bin/sign_update VoiceInk.dmg -f /tmp/sparkle_private_key | grep "sparkle:edSignature" | sed 's/.*sparkle:edSignature="\([^"]*\)".*/\1/')
           echo "SPARKLE_SIGNATURE=$SIGNATURE" >> $GITHUB_ENV
           rm /tmp/sparkle_private_key
 
