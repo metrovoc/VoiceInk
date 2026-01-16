@@ -29,7 +29,7 @@ class VoiceInkEngine: NSObject, ObservableObject {
     let enhancementService: AIEnhancementService?
     private let pipeline: TranscriptionPipeline
 
-    let logger = Logger(subsystem: "com.prakashjoshipax.voiceink", category: "VoiceInkEngine")
+    let logger = Logger(subsystem: "com.metrovoc.voiceink", category: "VoiceInkEngine")
 
     init(
         modelContext: ModelContext,
@@ -43,7 +43,7 @@ class VoiceInkEngine: NSObject, ObservableObject {
         self.enhancementService = enhancementService
 
         let appSupportDirectory = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("com.prakashjoshipax.VoiceInk")
+            .appendingPathComponent("com.metrovoc.VoiceInk")
         self.recordingsDirectory = appSupportDirectory.appendingPathComponent("Recordings")
 
         self.serviceRegistry = TranscriptionServiceRegistry(

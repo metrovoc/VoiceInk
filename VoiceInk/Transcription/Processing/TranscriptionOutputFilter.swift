@@ -1,4 +1,5 @@
 import Foundation
+import os
 
 enum PunctuationCleanupMode: String, Codable, CaseIterable, Identifiable {
     case keep = "keep"
@@ -48,6 +49,7 @@ enum PunctuationCleanupMode: String, Codable, CaseIterable, Identifiable {
 struct TranscriptionOutputFilter {
     private static let lowercaseTranscriptionKey = "LowercaseTranscription"
     private static let apostropheLikeCharacters = CharacterSet(charactersIn: "'’‘ʼ＇")
+    private static let logger = Logger(subsystem: "com.metrovoc.voiceink", category: "TranscriptionOutputFilter")
     
     private static let hallucinationPatterns = [
         #"\[.*?\]"#,     // []
