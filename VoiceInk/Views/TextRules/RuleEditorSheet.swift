@@ -10,7 +10,6 @@ struct RuleEditorSheet: View {
     @State private var pattern: String
     @State private var replacement: String
     @State private var matchMode: MatchMode
-    @State private var priority: Int
     @State private var showError = false
     @State private var errorMessage = ""
 
@@ -22,7 +21,6 @@ struct RuleEditorSheet: View {
         _pattern = State(initialValue: rule?.pattern ?? "")
         _replacement = State(initialValue: rule?.replacement ?? "")
         _matchMode = State(initialValue: rule?.matchMode ?? .literal)
-        _priority = State(initialValue: rule?.priority ?? 0)
     }
 
     var body: some View {
@@ -91,14 +89,6 @@ struct RuleEditorSheet: View {
                     .font(.system(size: 11))
                     .foregroundColor(.secondary)
             }
-
-            VStack(alignment: .leading, spacing: 6) {
-                Text("Priority (lower runs first)")
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundColor(.secondary)
-                Stepper("\(priority)", value: $priority, in: -100...100)
-                    .font(.system(size: 13))
-            }
         }
         .padding()
     }
@@ -107,10 +97,8 @@ struct RuleEditorSheet: View {
         switch matchMode {
         case .literal:
             return "Matches exact text anywhere (works for punctuation like \"...\")"
-        case .literalWord:
-            return "Matches whole words only (uses word boundaries)"
         case .regex:
-            return "Matches using regular expression pattern"
+            return "Matches using regular expression pattern (use \\b for word boundaries)"
         }
     }
 
@@ -146,13 +134,11 @@ struct RuleEditorSheet: View {
             existingRule.pattern = trimmedPattern
             existingRule.replacement = replacement
             existingRule.matchMode = matchMode
-            existingRule.priority = priority
         } else {
             let newRule = TextRule(
                 pattern: trimmedPattern,
                 replacement: replacement,
-                matchMode: matchMode,
-                priority: priority
+                matchMode: matchMode
             )
             modelContext.insert(newRule)
         }
