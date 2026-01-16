@@ -124,6 +124,8 @@ class TranscriptionPipeline {
             }
 
             text = WordReplacementService.shared.applyReplacements(to: text, using: modelContext)
+            text = TextTransformService.shared.applyRules(to: text, using: modelContext)
+
             let cleanedText = TranscriptionOutputFilter.applyCleanupPreferences(
                 text,
                 punctuationMode: formattingConfiguration.punctuationCleanupMode,
