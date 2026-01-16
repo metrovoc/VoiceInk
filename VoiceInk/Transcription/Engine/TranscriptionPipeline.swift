@@ -112,6 +112,10 @@ class TranscriptionPipeline {
             }
 
             text = WordReplacementService.shared.applyReplacements(to: text, using: modelContext)
+
+            text = TextTransformService.shared.applyRules(to: text, using: modelContext)
+            logger.notice("📝 TextTransform: \(text, privacy: .public)")
+
             let cleanedText = TranscriptionOutputFilter.applyUserCleanupPreferences(text)
 
             let actualDuration = await AudioFileMetadata.duration(for: audioURL)
