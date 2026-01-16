@@ -385,6 +385,9 @@ class WhisperState: NSObject, ObservableObject {
             text = WordReplacementService.shared.applyReplacements(to: text, using: modelContext)
             logger.notice("📝 WordReplacement: \(text, privacy: .public)")
 
+            text = TextTransformService.shared.applyRules(to: text, using: modelContext)
+            logger.notice("📝 TextTransform: \(text, privacy: .public)")
+
             let audioAsset = AVURLAsset(url: url)
             let actualDuration = (try? CMTimeGetSeconds(await audioAsset.load(.duration))) ?? 0.0
             
