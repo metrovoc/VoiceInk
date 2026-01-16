@@ -83,7 +83,7 @@ private enum DashboardStatsLoader {
 }
 
 struct DashboardContent: View {
-    private let logger = Logger(subsystem: "com.prakashjoshipax.voiceink", category: "DashboardContent")
+    private let logger = Logger(subsystem: "com.metrovoc.voiceink", category: "DashboardContent")
     let modelContext: ModelContext
     let licenseState: LicenseViewModel.LicenseState
     let onAddLicenseKey: () -> Void
