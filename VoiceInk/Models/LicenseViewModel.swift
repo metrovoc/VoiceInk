@@ -43,24 +43,8 @@ class LicenseViewModel: ObservableObject {
     }
 
     private func loadLicenseState() {
-        // Check for existing license key
-        if let storedLicenseKey = licenseManager.licenseKey {
-            self.licenseKey = storedLicenseKey
-
-            // If we have a license key, trust that it's licensed
-            // Skip server validation on startup
-            if licenseManager.activationId != nil || !userDefaults.bool(forKey: "VoiceInkLicenseRequiresActivation") {
-                licenseState = .licensed
-                activationsLimit = userDefaults.activationsLimit
-                return
-            }
-        }
-
-        if let trialStartDate = licenseManager.trialStartDate {
-            refreshTrialState(from: trialStartDate)
-        } else {
-            setUnlicensedState()
-        }
+        // Auto-enable Pro for local fork
+        licenseState = .licensed
     }
 
     var isLicensed: Bool {
