@@ -151,6 +151,12 @@ class ImportExportService {
             exportedWordReplacements = Dictionary(replacements.map { ($0.originalText, $0.replacementText) }, uniquingKeysWith: { _, last in last })
         }
 
+        var exportedTextRules: [TextRuleBackup]? = nil
+        let textRulesDescriptor = FetchDescriptor<TextRule>()
+        if let rules = try? modelContext.fetch(textRulesDescriptor), !rules.isEmpty {
+            exportedTextRules = rules.map(TextRuleBackup.init)
+        }
+
         let punctuationCleanupMode = PunctuationCleanupMode.current()
         let generalSettingsToExport = GeneralBackup(
             primaryRecordingShortcut: ShortcutStore.shortcut(for: .primaryRecording).map(ShortcutBackup.init),
@@ -196,6 +202,7 @@ class ImportExportService {
             powerModeShortcuts: powerModeShortcuts.isEmpty ? nil : powerModeShortcuts,
             vocabularyWords: exportedDictionaryItems,
             wordReplacements: exportedWordReplacements,
+            textRules: exportedTextRules,
             generalSettings: generalSettingsToExport,
             customEmojis: emojiManager.customEmojis,
             customCloudModels: customModels

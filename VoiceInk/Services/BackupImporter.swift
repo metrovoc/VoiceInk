@@ -28,6 +28,10 @@ enum BackupImporter {
             try importDictionary(from: backup, modelContext: modelContext)
         }
 
+        if categories.contains(.textRules) {
+            try importTextRules(from: backup, modelContext: modelContext)
+        }
+
         if categories.contains(.general) {
             importGeneral(
                 backup.generalSettings,
@@ -282,6 +286,60 @@ enum BackupImporter {
     }
 
     @MainActor
+    private static func importTextRules(from backup: BackupFile, modelContext: ModelContext) throws {
+        guard let rules = backup.textRules else {
+            print("No text rules found in the imported file. Existing rules remain unchanged.")
+            return
+        }
+
+        let descriptor = FetchDescriptor<TextRule>()
+        let existingRules = try modelContext.fetch(descriptor)
+        var existingKeys = Set(existingRules.map { textRuleKey(pattern: $0.pattern, replacement: $0.replacement, matchMode: $0.matchMode) })
+        var insertedRules = 0
+        var skippedInvalidRules = 0
+
+        for rule in rules {
+            let pattern = rule.pattern.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !pattern.isEmpty else {
+                skippedInvalidRules += 1
+                continue
+            }
+
+            let matchMode = MatchMode(rawValue: rule.matchMode) ?? .literal
+            let key = textRuleKey(pattern: pattern, replacement: rule.replacement, matchMode: matchMode)
+            guard !existingKeys.contains(key) else { continue }
+
+            modelContext.insert(TextRule(
+                pattern: pattern,
+                replacement: rule.replacement,
+                matchMode: matchMode,
+                isEnabled: rule.isEnabled
+            ))
+            existingKeys.insert(key)
+            insertedRules += 1
+        }
+
+        guard insertedRules > 0 else {
+            print("No new text rules were imported.")
+            if skippedInvalidRules > 0 {
+                print("Skipped \(skippedInvalidRules) invalid text rules from the imported file.")
+            }
+            return
+        }
+
+        do {
+            try modelContext.save()
+            print("Successfully imported \(insertedRules) text rules to SwiftData.")
+            if skippedInvalidRules > 0 {
+                print("Skipped \(skippedInvalidRules) invalid text rules from the imported file.")
+            }
+        } catch {
+            modelContext.rollback()
+            throw BackupImportError.saveFailed("text rules", error)
+        }
+    }
+
+    @MainActor
     private static func importCustomModels(_ models: [CustomModelBackup]?, transcriptionModelManager: TranscriptionModelManager) {
         guard let models else {
             print("No custom models found in the imported file.")
@@ -300,5 +358,13 @@ enum BackupImporter {
             .split(separator: ",")
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
             .filter { !$0.isEmpty }
+    }
+
+    private static func textRuleKey(pattern: String, replacement: String, matchMode: MatchMode) -> String {
+        [
+            matchMode.rawValue.lowercased(),
+            pattern.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(),
+            replacement.trimmingCharacters(in: .whitespacesAndNewlines)
+        ].joined(separator: "\u{1F}")
     }
 }
