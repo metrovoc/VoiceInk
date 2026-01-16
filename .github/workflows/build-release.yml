@@ -24,7 +24,7 @@ jobs:
       - name: Get whisper.cpp latest commit
         id: whisper-version
         run: |
-          WHISPER_SHA=$(gh api repos/ggerganov/whisper.cpp/commits/master --jq '.sha[:8]')
+          WHISPER_SHA=$(gh api repos/ggerganov/whisper.cpp/commits/HEAD --jq '.sha[:8]')
           echo "sha=$WHISPER_SHA" >> $GITHUB_OUTPUT
         env:
           GH_TOKEN: ${{ github.token }}
