@@ -30,17 +30,22 @@ jobs:
         id: cache-whisper
         uses: actions/cache@v4
         with:
-          path: ${{ github.workspace }}/../VoiceInk-Dependencies/whisper.cpp
+          path: VoiceInk-Dependencies/whisper.cpp
           key: whisper-xcframework-${{ steps.whisper-version.outputs.tag }}
 
       - name: Build whisper.cpp xcframework
         if: steps.cache-whisper.outputs.cache-hit != 'true'
         run: |
-          mkdir -p "$GITHUB_WORKSPACE/../VoiceInk-Dependencies"
-          cd "$GITHUB_WORKSPACE/../VoiceInk-Dependencies"
+          mkdir -p VoiceInk-Dependencies
+          cd VoiceInk-Dependencies
           git clone --depth 1 --branch ${{ steps.whisper-version.outputs.tag }} https://github.com/ggerganov/whisper.cpp.git
           cd whisper.cpp
           ./build-xcframework.sh
+
+      - name: Link whisper.cpp for Xcode
+        run: |
+          mkdir -p ../VoiceInk-Dependencies
+          ln -sf "$GITHUB_WORKSPACE/VoiceInk-Dependencies/whisper.cpp" ../VoiceInk-Dependencies/whisper.cpp
 
       - name: Determine version
         run: |
