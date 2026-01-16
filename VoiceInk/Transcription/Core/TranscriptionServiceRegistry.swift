@@ -8,7 +8,7 @@ class TranscriptionServiceRegistry {
     private weak var modelProvider: (any LocalModelProvider)?
     private let modelsDirectory: URL
     private let modelContext: ModelContext
-    private let logger = Logger(subsystem: "com.prakashjoshipax.voiceink", category: "TranscriptionServiceRegistry")
+    private let logger = Logger(subsystem: "com.metrovoc.voiceink", category: "TranscriptionServiceRegistry")
 
     private(set) lazy var localTranscriptionService = LocalTranscriptionService(
         modelsDirectory: modelsDirectory,
