@@ -1,0 +1,128 @@
+name: Build Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version number (e.g. 1.70)'
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Select Xcode 16
+        run: sudo xcode-select -s /Applications/Xcode_16.2.app/Contents/Developer
+
+      - name: Setup dependencies directory
+        run: mkdir -p ~/VoiceInk-Dependencies
+
+      - name: Build whisper.cpp xcframework
+        run: |
+          cd ~/VoiceInk-Dependencies
+          git clone --depth 1 https://github.com/ggerganov/whisper.cpp.git
+          cd whisper.cpp
+          ./build-xcframework.sh
+
+      - name: Build VoiceInk
+        run: |
+          xcodebuild -project VoiceInk.xcodeproj \
+            -scheme VoiceInk \
+            -configuration Release \
+            -derivedDataPath build \
+            CODE_SIGN_IDENTITY="-" \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_ALLOWED=NO
+
+      - name: Create DMG
+        run: |
+          APP_PATH="build/Build/Products/Release/VoiceInk.app"
+          hdiutil create -volname VoiceInk -srcfolder "$APP_PATH" -ov -format UDZO VoiceInk.dmg
+
+      - name: Download Sparkle tools
+        run: |
+          curl -L -o /tmp/Sparkle.tar.xz https://github.com/sparkle-project/Sparkle/releases/download/2.8.0/Sparkle-2.8.0.tar.xz
+          tar xf /tmp/Sparkle.tar.xz -C /tmp
+
+      - name: Sign DMG for Sparkle
+        env:
+          SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
+        run: |
+          echo "$SPARKLE_PRIVATE_KEY" > /tmp/sparkle_private_key
+          SIGNATURE=$(/tmp/bin/sign_update VoiceInk.dmg -f /tmp/sparkle_private_key | grep "sparkle:edSignature" | sed 's/.*sparkle:edSignature="\([^"]*\)".*/\1/')
+          echo "SPARKLE_SIGNATURE=$SIGNATURE" >> $GITHUB_ENV
+          rm /tmp/sparkle_private_key
+
+      - name: Determine version
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            VERSION="${{ github.event.inputs.version }}"
+          else
+            VERSION="${GITHUB_REF_NAME#v}"
+          fi
+          echo "VERSION=$VERSION" >> $GITHUB_ENV
+          echo "BUILD_NUM=${VERSION//./}" >> $GITHUB_ENV
+
+      - name: Generate appcast.xml
+        run: |
+          SIZE=$(stat -f%z VoiceInk.dmg)
+          DATE=$(date -R)
+          cat > appcast.xml << 'APPCAST_EOF'
+          <?xml version="1.0" standalone="yes"?>
+          <rss xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle" version="2.0">
+            <channel>
+              <title>VoiceInk (Custom)</title>
+              <item>
+                <title>VERSION_PLACEHOLDER</title>
+                <pubDate>DATE_PLACEHOLDER</pubDate>
+                <sparkle:version>BUILD_PLACEHOLDER</sparkle:version>
+                <sparkle:shortVersionString>VERSION_PLACEHOLDER</sparkle:shortVersionString>
+                <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+                <enclosure url="URL_PLACEHOLDER" length="SIZE_PLACEHOLDER" type="application/octet-stream" sparkle:edSignature="SIG_PLACEHOLDER"/>
+              </item>
+            </channel>
+          </rss>
+          APPCAST_EOF
+          sed -i '' "s|VERSION_PLACEHOLDER|$VERSION|g" appcast.xml
+          sed -i '' "s|DATE_PLACEHOLDER|$DATE|g" appcast.xml
+          sed -i '' "s|BUILD_PLACEHOLDER|$BUILD_NUM|g" appcast.xml
+          sed -i '' "s|SIZE_PLACEHOLDER|$SIZE|g" appcast.xml
+          sed -i '' "s|SIG_PLACEHOLDER|$SPARKLE_SIGNATURE|g" appcast.xml
+          sed -i '' "s|URL_PLACEHOLDER|https://github.com/${{ github.repository }}/releases/download/v$VERSION/VoiceInk.dmg|g" appcast.xml
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: VoiceInk.dmg
+          tag_name: v${{ env.VERSION }}
+          generate_release_notes: true
+
+      - name: Deploy appcast to GitHub Pages
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          # Save appcast.xml
+          cp appcast.xml /tmp/appcast.xml
+
+          # Switch to gh-pages branch
+          git fetch origin gh-pages || true
+          if git show-ref --verify --quiet refs/remotes/origin/gh-pages; then
+            git checkout gh-pages
+          else
+            git checkout --orphan gh-pages
+            git rm -rf . || true
+          fi
+
+          # Update files
+          cp /tmp/appcast.xml appcast.xml
+          git add appcast.xml
+          git commit -m "Update appcast for v${{ env.VERSION }}" || echo "No changes"
+          git push origin gh-pages --force
