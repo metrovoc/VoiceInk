@@ -42,7 +42,8 @@ struct VoiceInkApp: App {
         let schema = Schema([
             Transcription.self,
             VocabularyWord.self,
-            WordReplacement.self
+            WordReplacement.self,
+            TextRule.self
         ])
         var initializationFailed = false
         
@@ -144,7 +145,7 @@ struct VoiceInkApp: App {
             )
 
             // Dictionary configuration
-            let dictionarySchema = Schema([VocabularyWord.self, WordReplacement.self])
+            let dictionarySchema = Schema([VocabularyWord.self, WordReplacement.self, TextRule.self])
             let dictionaryConfig = ModelConfiguration(
                 "dictionary",
                 schema: dictionarySchema,
@@ -174,7 +175,7 @@ struct VoiceInkApp: App {
             )
 
             // Dictionary configuration
-            let dictionarySchema = Schema([VocabularyWord.self, WordReplacement.self])
+            let dictionarySchema = Schema([VocabularyWord.self, WordReplacement.self, TextRule.self])
             let dictionaryConfig = ModelConfiguration(
                 "dictionary",
                 schema: dictionarySchema,
