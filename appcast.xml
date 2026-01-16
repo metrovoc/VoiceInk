@@ -1,0 +1,14 @@
+<?xml version="1.0" standalone="yes"?>
+<rss xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle" version="2.0">
+  <channel>
+    <title>VoiceInk (Custom)</title>
+    <item>
+      <title>26.1</title>
+      <pubDate>Fri, 16 Jan 2026 10:22:48 +0000</pubDate>
+      <sparkle:version>261</sparkle:version>
+      <sparkle:shortVersionString>26.1</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+      <enclosure url="https://github.com/metrovoc/VoiceInk/releases/download/v26.1/VoiceInk.dmg" length="10381454" type="application/octet-stream" sparkle:edSignature="aUi0Ffx+eUTvuL4FSsbGTxxPRPZui5RC25GFuG0PCF9FcRKXoZ9Dy4f3MPTxudncjbeW6zV7AhhRBCYXZGZzDg=="/>
+    </item>
+  </channel>
+</rss>
