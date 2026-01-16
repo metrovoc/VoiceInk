@@ -1,0 +1,204 @@
+name: Sync Upstream
+
+on:
+  schedule:
+    - cron: '0 6 * * *'  # Daily at 6:00 UTC
+  workflow_dispatch:
+    inputs:
+      force_sync:
+        description: 'Force sync even if no upstream changes'
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+
+jobs:
+  sync-main:
+    runs-on: ubuntu-latest
+    outputs:
+      has_changes: ${{ steps.sync.outputs.has_changes }}
+      upstream_sha: ${{ steps.sync.outputs.upstream_sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Configure git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Sync main from upstream
+        id: sync
+        run: |
+          # Add upstream remote
+          git remote add upstream https://github.com/Beingpax/VoiceInk.git || true
+          git fetch upstream
+
+          # Check if there are new changes
+          LOCAL_SHA=$(git rev-parse origin/main)
+          UPSTREAM_SHA=$(git rev-parse upstream/main)
+
+          echo "upstream_sha=${UPSTREAM_SHA}" >> $GITHUB_OUTPUT
+
+          if [ "$LOCAL_SHA" = "$UPSTREAM_SHA" ] && [ "${{ inputs.force_sync }}" != "true" ]; then
+            echo "No upstream changes detected"
+            echo "has_changes=false" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          echo "has_changes=true" >> $GITHUB_OUTPUT
+
+          # Fast-forward main to upstream
+          git checkout -B main origin/main
+          git reset --hard upstream/main
+          git push origin main --force-with-lease
+
+  rebase-custom:
+    needs: sync-main
+    if: needs.sync-main.outputs.has_changes == 'true'
+    runs-on: ubuntu-latest
+    outputs:
+      rebase_status: ${{ steps.rebase.outputs.status }}
+      conflict_files: ${{ steps.rebase.outputs.conflict_files }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: custom
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Configure git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Attempt rebase
+        id: rebase
+        run: |
+          git fetch origin main
+
+          if git rebase origin/main; then
+            echo "status=success" >> $GITHUB_OUTPUT
+            git push origin custom --force-with-lease
+          else
+            echo "status=conflict" >> $GITHUB_OUTPUT
+            # Capture conflict files
+            CONFLICTS=$(git diff --name-only --diff-filter=U | tr '\n' ' ')
+            echo "conflict_files=${CONFLICTS}" >> $GITHUB_OUTPUT
+            git rebase --abort
+          fi
+
+  claude-resolve:
+    needs: rebase-custom
+    if: needs.rebase-custom.outputs.rebase_status == 'conflict'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: custom
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Configure git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Claude resolves conflicts
+        id: claude
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          prompt: |
+            Git rebase of 'custom' onto 'main' has conflicts.
+            Conflict files: ${{ needs.rebase-custom.outputs.conflict_files }}
+
+            ## Your Task
+
+            1. Run `git fetch origin && git checkout custom && git rebase origin/main`
+            2. For each conflict:
+               - Understand the INTENT of both changes
+               - Our custom changes represent intentional modifications - preserve them
+               - Upstream changes are improvements we want to incorporate
+               - Resolve intelligently, adapting our customizations to upstream's new structure
+
+            3. If you encounter a DESIGN CONFLICT (upstream intentionally removed/replaced
+               something we customized, making our changes incompatible), stop and output:
+               ```
+               DESIGN_CONFLICT: <file> - <brief description of the conflict>
+               ```
+
+            4. After resolving all conflicts:
+               - Run `git rebase --continue`
+               - Verify the build still works if there's a build script
+               - Push with `git push origin custom --force-with-lease`
+
+            ## Guidelines
+            - Preserve ALL our custom functionality
+            - Adapt line numbers and context to match upstream
+            - If unsure, prefer keeping our custom version
+          claude_args: "--allowedTools Bash,Read,Edit,Write,Glob,Grep"
+        continue-on-error: true
+
+      - name: Check result and notify
+        if: always()
+        run: |
+          # Check if custom was successfully pushed
+          git fetch origin custom
+          CUSTOM_SHA=$(git rev-parse origin/custom)
+          MAIN_SHA=$(git rev-parse origin/main)
+
+          # Check if custom contains main (rebase successful)
+          if git merge-base --is-ancestor $MAIN_SHA origin/custom 2>/dev/null; then
+            echo "✅ Rebase successful!"
+            exit 0
+          fi
+
+          # Rebase failed - create issue
+          echo "❌ Rebase failed, creating issue..."
+
+          gh issue create \
+            --title "🔧 Manual intervention needed: rebase conflict" \
+            --body "$(cat <<EOF
+          ## Upstream Sync Failed
+
+          The automatic rebase of \`custom\` onto \`main\` encountered conflicts that couldn't be resolved automatically.
+
+          **Conflict files:**
+          \`\`\`
+          ${CONFLICT_FILES}
+          \`\`\`
+
+          **Claude Status:** ${CLAUDE_OUTCOME}
+
+          ### To resolve manually:
+          \`\`\`bash
+          git fetch origin
+          git checkout custom
+          git rebase origin/main
+          # resolve conflicts
+          git rebase --continue
+          git push origin custom --force-with-lease
+          \`\`\`
+
+          **Workflow run:** ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          EOF
+          )" \
+            --label "sync-conflict"
+        env:
+          CLAUDE_OUTCOME: ${{ steps.claude.outcome }}
+          CONFLICT_FILES: ${{ needs.rebase-custom.outputs.conflict_files }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  notify-no-changes:
+    needs: sync-main
+    if: needs.sync-main.outputs.has_changes == 'false'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Log status
+        run: echo "No upstream changes - nothing to do"
