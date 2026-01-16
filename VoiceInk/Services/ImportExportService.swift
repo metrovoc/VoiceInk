@@ -35,6 +35,14 @@ struct VocabularyWordData: Codable {
     let word: String
 }
 
+// Simple codable struct for text rules (for export/import only)
+struct TextRuleData: Codable {
+    let pattern: String
+    let replacement: String
+    let matchMode: String
+    let isEnabled: Bool
+}
+
 struct VoiceInkExportedSettings: Codable {
     let version: String
     let customPrompts: [CustomPrompt]
@@ -44,6 +52,7 @@ struct VoiceInkExportedSettings: Codable {
     let generalSettings: GeneralSettings?
     let customEmojis: [String]?
     let customCloudModels: [CustomCloudModel]?
+    let textRules: [TextRuleData]?
 }
 
 class ImportExportService {
@@ -99,6 +108,13 @@ class ImportExportService {
             exportedWordReplacements = Dictionary(uniqueKeysWithValues: replacements.map { ($0.originalText, $0.replacementText) })
         }
 
+        // Fetch text rules from SwiftData
+        var exportedTextRules: [TextRuleData]? = nil
+        let textRulesDescriptor = FetchDescriptor<TextRule>()
+        if let rules = try? whisperState.modelContext.fetch(textRulesDescriptor), !rules.isEmpty {
+            exportedTextRules = rules.map { TextRuleData(pattern: $0.pattern, replacement: $0.replacement, matchMode: $0.matchMode.rawValue, isEnabled: $0.isEnabled) }
+        }
+
         let generalSettingsToExport = GeneralSettings(
             toggleMiniRecorderShortcut: KeyboardShortcuts.getShortcut(for: .toggleMiniRecorder),
             toggleMiniRecorderShortcut2: KeyboardShortcuts.getShortcut(for: .toggleMiniRecorder2),
@@ -132,7 +148,8 @@ class ImportExportService {
             wordReplacements: exportedWordReplacements,
             generalSettings: generalSettingsToExport,
             customEmojis: emojiManager.customEmojis,
-            customCloudModels: customModels
+            customCloudModels: customModels,
+            textRules: exportedTextRules
         )
 
         let encoder = JSONEncoder()
@@ -270,6 +287,30 @@ class ImportExportService {
                         print("Successfully imported word replacements to SwiftData.")
                     } else {
                         print("No word replacements found in the imported file. Existing replacements remain unchanged.")
+                    }
+
+                    // Import text rules to SwiftData
+                    if let rulesToImport = importedSettings.textRules {
+                        let textRulesDescriptor = FetchDescriptor<TextRule>()
+                        let existingRules = (try? whisperState.modelContext.fetch(textRulesDescriptor)) ?? []
+                        let existingPatternsSet = Set(existingRules.map { $0.pattern.lowercased() })
+
+                        for ruleData in rulesToImport {
+                            if !existingPatternsSet.contains(ruleData.pattern.lowercased()) {
+                                let matchMode = MatchMode(rawValue: ruleData.matchMode) ?? .literal
+                                let newRule = TextRule(
+                                    pattern: ruleData.pattern,
+                                    replacement: ruleData.replacement,
+                                    matchMode: matchMode,
+                                    isEnabled: ruleData.isEnabled
+                                )
+                                whisperState.modelContext.insert(newRule)
+                            }
+                        }
+                        try? whisperState.modelContext.save()
+                        print("Successfully imported text rules to SwiftData.")
+                    } else {
+                        print("No text rules found in the imported file. Existing rules remain unchanged.")
                     }
 
                     if let general = importedSettings.generalSettings {
