@@ -30,6 +30,8 @@ struct TextRulesContentView: View {
     @State private var showAlert = false
     @State private var alertMessage = ""
     @State private var showInfoPopover = false
+    @State private var previewExpanded = false
+    @State private var previewInput = ""
 
     var body: some View {
         VStack(alignment: .leading, spacing: 20) {
@@ -113,6 +115,15 @@ struct TextRulesContentView: View {
                 }
                 .frame(maxWidth: .infinity, minHeight: 150)
                 .background(CardBackground(isSelected: false))
+            }
+
+            // Preview section
+            if !rules.isEmpty {
+                PreviewSection(
+                    isExpanded: $previewExpanded,
+                    input: $previewInput,
+                    rules: rules
+                )
             }
         }
         .sheet(isPresented: $showAddSheet) {
@@ -231,5 +242,112 @@ struct TextRulesInfoPopover: View {
                 .font(.caption)
                 .foregroundColor(.secondary)
         }
+    }
+}
+
+// MARK: - Preview Section
+
+struct PreviewSection: View {
+    @Binding var isExpanded: Bool
+    @Binding var input: String
+    let rules: [TextRule]
+
+    private var previewResult: (steps: [RulePreviewStep], final: String) {
+        TextTransformService.preview(input: input, rules: rules)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            // Header
+            Button(action: { withAnimation(.easeInOut(duration: 0.2)) { isExpanded.toggle() } }) {
+                HStack(spacing: 6) {
+                    Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundColor(.secondary)
+                        .frame(width: 12)
+                    Text("Preview")
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundColor(.primary)
+                    Spacer()
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .padding(.vertical, 8)
+
+            if isExpanded {
+                VStack(alignment: .leading, spacing: 12) {
+                    // Input field
+                    TextField("Enter test text...", text: $input)
+                        .textFieldStyle(.roundedBorder)
+                        .font(.system(size: 13, design: .monospaced))
+
+                    // Results
+                    if !input.isEmpty {
+                        previewResultsView
+                    }
+                }
+                .padding(.top, 4)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var previewResultsView: some View {
+        let result = previewResult
+
+        VStack(alignment: .leading, spacing: 0) {
+            // Pipeline steps
+            ForEach(Array(result.steps.enumerated()), id: \.offset) { index, step in
+                HStack(spacing: 8) {
+                    // Change indicator
+                    Image(systemName: step.changed ? "arrow.right.circle.fill" : "arrow.right.circle")
+                        .font(.system(size: 11))
+                        .foregroundColor(step.changed ? .accentColor : .secondary.opacity(0.5))
+
+                    // Rule pattern
+                    Text(step.rule.pattern)
+                        .font(.system(size: 11, design: .monospaced))
+                        .foregroundColor(step.changed ? .primary : .secondary)
+                        .lineLimit(1)
+
+                    Spacer()
+
+                    // Output after this rule
+                    Text(step.output)
+                        .font(.system(size: 11, design: .monospaced))
+                        .foregroundColor(step.changed ? .primary : .secondary)
+                        .lineLimit(1)
+                }
+                .padding(.vertical, 6)
+                .padding(.horizontal, 8)
+                .background(step.changed ? Color.accentColor.opacity(0.08) : Color.clear)
+
+                if index < result.steps.count - 1 {
+                    Divider().padding(.leading, 28)
+                }
+            }
+
+            // Final result
+            if !result.steps.isEmpty {
+                Divider()
+                HStack(spacing: 8) {
+                    Image(systemName: "checkmark.circle.fill")
+                        .font(.system(size: 11))
+                        .foregroundColor(.green)
+                    Text("Result")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundColor(.secondary)
+                    Spacer()
+                    Text(result.final)
+                        .font(.system(size: 12, design: .monospaced))
+                        .fontWeight(.medium)
+                }
+                .padding(.vertical, 8)
+                .padding(.horizontal, 8)
+            }
+        }
+        .background(Color(.textBackgroundColor).opacity(0.5))
+        .cornerRadius(6)
     }
 }

@@ -1,10 +1,32 @@
 import Foundation
 import SwiftData
 
+struct RulePreviewStep {
+    let rule: TextRule
+    let output: String
+    let changed: Bool
+}
+
 class TextTransformService {
     static let shared = TextTransformService()
 
     private init() {}
+
+    /// Preview transformation pipeline, returning each step's result
+    static func preview(input: String, rules: [TextRule]) -> (steps: [RulePreviewStep], final: String) {
+        guard !input.isEmpty else { return ([], input) }
+
+        var current = input
+        var steps: [RulePreviewStep] = []
+
+        for rule in rules where rule.isEnabled {
+            let output = shared.apply(rule: rule, to: current)
+            steps.append(RulePreviewStep(rule: rule, output: output, changed: output != current))
+            current = output
+        }
+
+        return (steps, current)
+    }
 
     func applyRules(to text: String, using context: ModelContext) -> String {
         let descriptor = FetchDescriptor<TextRule>(
