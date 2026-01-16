@@ -5,6 +5,7 @@ enum BackupCategory: String, CaseIterable, Hashable {
     case prompts
     case modes
     case dictionary
+    case textRules
     case customModels
 
     var title: String {
@@ -17,6 +18,8 @@ enum BackupCategory: String, CaseIterable, Hashable {
             return String(localized: "Modes")
         case .dictionary:
             return String(localized: "Dictionary")
+        case .textRules:
+            return String(localized: "Text Rules")
         case .customModels:
             return String(localized: "Custom Model Definitions")
         }
@@ -109,6 +112,27 @@ struct WordBackup: Codable {
     }
 }
 
+struct TextRuleBackup: Codable {
+    let pattern: String
+    let replacement: String
+    let matchMode: String
+    let isEnabled: Bool
+
+    init(pattern: String, replacement: String, matchMode: String, isEnabled: Bool) {
+        self.pattern = pattern
+        self.replacement = replacement
+        self.matchMode = matchMode
+        self.isEnabled = isEnabled
+    }
+
+    init(rule: TextRule) {
+        self.pattern = rule.pattern
+        self.replacement = rule.replacement
+        self.matchMode = rule.matchMode.rawValue
+        self.isEnabled = rule.isEnabled
+    }
+}
+
 struct BackupFile: Codable {
     let version: String
     let customPrompts: [CustomPrompt]
@@ -116,23 +140,25 @@ struct BackupFile: Codable {
     let modeShortcuts: [String: ShortcutBackup]?
     let vocabularyWords: [WordBackup]?
     let wordReplacements: [String: String]?
+    let textRules: [TextRuleBackup]?
     let generalSettings: GeneralBackup?
     let customEmojis: [String]?
     let customCloudModels: [CustomModelBackup]?
 
     private enum CodingKeys: String, CodingKey {
-        case version, customPrompts, modeConfigs, modeShortcuts, vocabularyWords, wordReplacements, generalSettings, customEmojis, customCloudModels
+        case version, customPrompts, modeConfigs, modeShortcuts, vocabularyWords, wordReplacements, textRules, generalSettings, customEmojis, customCloudModels
         case legacyModeConfigs = "powerModeConfigs"
         case legacyModeShortcuts = "powerModeShortcuts"
     }
 
-    init(version: String, customPrompts: [CustomPrompt], modeConfigs: [ModeConfig], modeShortcuts: [String: ShortcutBackup]?, vocabularyWords: [WordBackup]?, wordReplacements: [String: String]?, generalSettings: GeneralBackup?, customEmojis: [String]?, customCloudModels: [CustomModelBackup]?) {
+    init(version: String, customPrompts: [CustomPrompt], modeConfigs: [ModeConfig], modeShortcuts: [String: ShortcutBackup]?, vocabularyWords: [WordBackup]?, wordReplacements: [String: String]?, textRules: [TextRuleBackup]?, generalSettings: GeneralBackup?, customEmojis: [String]?, customCloudModels: [CustomModelBackup]?) {
         self.version = version
         self.customPrompts = customPrompts
         self.modeConfigs = modeConfigs
         self.modeShortcuts = modeShortcuts
         self.vocabularyWords = vocabularyWords
         self.wordReplacements = wordReplacements
+        self.textRules = textRules
         self.generalSettings = generalSettings
         self.customEmojis = customEmojis
         self.customCloudModels = customCloudModels
@@ -149,6 +175,7 @@ struct BackupFile: Codable {
             ?? container.decodeIfPresent([String: ShortcutBackup].self, forKey: .legacyModeShortcuts)
         vocabularyWords = try container.decodeIfPresent([WordBackup].self, forKey: .vocabularyWords)
         wordReplacements = try container.decodeIfPresent([String: String].self, forKey: .wordReplacements)
+        textRules = try container.decodeIfPresent([TextRuleBackup].self, forKey: .textRules)
         generalSettings = try container.decodeIfPresent(GeneralBackup.self, forKey: .generalSettings)
         customEmojis = try container.decodeIfPresent([String].self, forKey: .customEmojis)
         customCloudModels = try container.decodeIfPresent([CustomModelBackup].self, forKey: .customCloudModels)
@@ -162,6 +189,7 @@ struct BackupFile: Codable {
         try container.encodeIfPresent(modeShortcuts, forKey: .modeShortcuts)
         try container.encodeIfPresent(vocabularyWords, forKey: .vocabularyWords)
         try container.encodeIfPresent(wordReplacements, forKey: .wordReplacements)
+        try container.encodeIfPresent(textRules, forKey: .textRules)
         try container.encodeIfPresent(generalSettings, forKey: .generalSettings)
         try container.encodeIfPresent(customEmojis, forKey: .customEmojis)
         try container.encodeIfPresent(customCloudModels, forKey: .customCloudModels)
