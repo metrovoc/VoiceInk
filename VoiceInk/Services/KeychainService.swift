@@ -124,19 +124,15 @@ final class KeychainService {
 
     #if !LOCAL_BUILD
     /// Creates base Keychain query dictionary.
+    /// Note: `syncable` parameter is kept for API compatibility but no longer used.
+    /// iCloud sync requires code signing, which is disabled for unsigned builds.
     private func baseQuery(forKey key: String, syncable: Bool) -> [String: Any] {
-        var query: [String: Any] = [
+        _ = syncable // Unused - iCloud sync disabled for unsigned builds
+        return [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
-            kSecAttrAccount as String: key,
-            kSecUseDataProtectionKeychain as String: true
+            kSecAttrAccount as String: key
         ]
-
-        if syncable {
-            query[kSecAttrSynchronizable as String] = kCFBooleanTrue
-        }
-
-        return query
     }
     #endif
 }
