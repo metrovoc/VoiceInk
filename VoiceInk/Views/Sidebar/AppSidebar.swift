@@ -72,6 +72,7 @@ private extension ViewType {
         .transcribeAudio,
         .history,
         .dictionary,
+        .textRules,
         .models,
         .audio
     ]
@@ -96,6 +97,7 @@ private extension ViewType {
         case .models: return "cpu"
         case .modes: return "sparkles.square.fill.on.square"
         case .audio: return "mic.fill"
+        case .textRules: return "doc.text.magnifyingglass"
         case .dictionary: return "text.book.closed.fill"
         case .settings: return "gearshape.fill"
         case .license: return "checkmark.seal.fill"
@@ -112,6 +114,8 @@ private extension ViewType {
             return .init(background: AppTheme.Sidebar.models)
         case .audio:
             return .init(background: AppTheme.Sidebar.fallback)
+        case .textRules:
+            return .init(background: AppTheme.Sidebar.textRules)
         case .dictionary:
             return .init(background: AppTheme.Sidebar.dictionary)
         case .history:

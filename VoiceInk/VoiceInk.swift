@@ -49,7 +49,8 @@ struct VoiceInkApp: App {
             Transcription.self,
             VocabularyWord.self,
             WordReplacement.self,
-            SessionMetric.self
+            SessionMetric.self,
+            TextRule.self
         ])
         let resolvedContainer: ModelContainer
 
@@ -213,7 +214,7 @@ struct VoiceInkApp: App {
             cloudKitDatabase: .none
         )
 
-        let dictionarySchema = Schema([VocabularyWord.self, WordReplacement.self])
+        let dictionarySchema = Schema([VocabularyWord.self, WordReplacement.self, TextRule.self])
         #if LOCAL_BUILD
         let dictionaryCloudKit: ModelConfiguration.CloudKitDatabase = .none
         #else
@@ -246,7 +247,7 @@ struct VoiceInkApp: App {
         let transcriptSchema = Schema([Transcription.self])
         let transcriptConfig = ModelConfiguration("default", schema: transcriptSchema, isStoredInMemoryOnly: true)
 
-        let dictionarySchema = Schema([VocabularyWord.self, WordReplacement.self])
+        let dictionarySchema = Schema([VocabularyWord.self, WordReplacement.self, TextRule.self])
         let dictionaryConfig = ModelConfiguration("dictionary", schema: dictionarySchema, isStoredInMemoryOnly: true)
 
         let statsSchema = Schema([SessionMetric.self])
