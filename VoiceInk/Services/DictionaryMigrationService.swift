@@ -4,7 +4,7 @@ import OSLog
 
 class DictionaryMigrationService {
     static let shared = DictionaryMigrationService()
-    private let logger = Logger(subsystem: "com.prakashjoshipax.voiceink", category: "DictionaryMigration")
+    private let logger = Logger(subsystem: "com.metrovoc.voiceink", category: "DictionaryMigration")
 
     private let migrationCompletedKey = "HasMigratedDictionaryToSwiftData_v2"
     private let vocabularyKey = "CustomVocabularyItems"
