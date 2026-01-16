@@ -10,7 +10,7 @@ class TranscriptionModelManager: ObservableObject {
     private weak var whisperModelManager: WhisperModelManager?
     private weak var parakeetModelManager: ParakeetModelManager?
 
-    private let logger = Logger(subsystem: "com.prakashjoshipax.voiceink", category: "TranscriptionModelManager")
+    private let logger = Logger(subsystem: "com.metrovoc.voiceink", category: "TranscriptionModelManager")
 
     init(whisperModelManager: WhisperModelManager, parakeetModelManager: ParakeetModelManager) {
         self.whisperModelManager = whisperModelManager
