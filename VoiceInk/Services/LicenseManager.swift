@@ -7,7 +7,7 @@ final class LicenseManager {
 
     private let keychain = KeychainService.shared
     private let userDefaults = UserDefaults.standard
-    private let logger = Logger(subsystem: "com.prakashjoshipax.voiceink", category: "LicenseManager")
+    private let logger = Logger(subsystem: "com.metrovoc.voiceink", category: "LicenseManager")
 
     private let licenseKeyIdentifier = "voiceink.license.key"
     private let trialStartDateIdentifier = "voiceink.license.trialStartDate"
