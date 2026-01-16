@@ -52,6 +52,23 @@
 		};
 /* End PBXCopyFilesBuildPhase section */
 
+/* Begin PBXShellScriptBuildPhase section */
+		E1DEPLOY0012E5DC555000DEV /* Deploy to Applications */ = {
+			isa = PBXShellScriptBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputPaths = (
+			);
+			name = "Deploy to Applications";
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "if [ \"$CONFIGURATION\" = \"Debug\" ]; then\n    APP_NAME=\"VoiceInk-Dev.app\"\n    DEST=\"/Applications/$APP_NAME\"\n    SRC=\"${BUILT_PRODUCTS_DIR}/VoiceInk.app\"\n    \n    # Verify source app is complete\n    if [ ! -f \"$SRC/Contents/MacOS/VoiceInk\" ]; then\n        echo \"Source app not ready, skipping deploy\"\n        exit 0\n    fi\n    \n    # Kill running instance\n    pkill -x \"VoiceInk-Dev\" 2>/dev/null || true\n    sleep 0.5\n    \n    # Remove old version\n    rm -rf \"$DEST\"\n    \n    # Copy new version\n    cp -R \"$SRC\" \"$DEST\"\n    \n    # Remove quarantine\n    xattr -cr \"$DEST\"\n    \n    echo \"Deployed to $DEST\"\nfi\n";
+		};
+/* End PBXShellScriptBuildPhase section */
+
 /* Begin PBXFileReference section */
 		E11473B02CBE0F0A00318EE4 /* VoiceInk.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = VoiceInk.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		E11473C32CBE0F0B00318EE4 /* VoiceInkTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = VoiceInkTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -155,6 +172,7 @@
 				E11473AD2CBE0F0A00318EE4 /* Frameworks */,
 				E11473AE2CBE0F0A00318EE4 /* Resources */,
 				E1A8C8CD2E1257B7003E58EC /* Embed Frameworks */,
+				E1DEPLOY0012E5DC555000DEV /* Deploy to Applications */,
 			);
 			buildRules = (
 			);
