@@ -6,7 +6,7 @@
 	<string>development</string>
 	<key>com.apple.developer.icloud-container-identifiers</key>
 	<array>
-		<string>iCloud.com.prakashjoshipax.VoiceInk</string>
+		<string>iCloud.com.metrovoc.VoiceInk</string>
 	</array>
 	<key>com.apple.developer.icloud-services</key>
 	<array>
