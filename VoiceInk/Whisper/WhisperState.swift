@@ -99,7 +99,7 @@ class WhisperState: NSObject, ObservableObject {
     let recordingsDirectory: URL
     let enhancementService: AIEnhancementService?
     var licenseViewModel: LicenseViewModel
-    let logger = Logger(subsystem: "com.metrovoc.voiceink", category: "WhisperState")
+    let logger = Logger(subsystem: AppIdentity.loggerSubsystem, category: "WhisperState")
     var notchWindowManager: NotchWindowManager?
     var miniWindowManager: MiniWindowManager?
     
@@ -109,11 +109,8 @@ class WhisperState: NSObject, ObservableObject {
     
     init(modelContext: ModelContext, enhancementService: AIEnhancementService? = nil) {
         self.modelContext = modelContext
-        let appSupportDirectory = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("com.metrovoc.VoiceInk")
-        
-        self.modelsDirectory = appSupportDirectory.appendingPathComponent("WhisperModels")
-        self.recordingsDirectory = appSupportDirectory.appendingPathComponent("Recordings")
+        self.modelsDirectory = AppPaths.modelsDirectory
+        self.recordingsDirectory = AppPaths.recordingsDirectory
         
         self.enhancementService = enhancementService
         self.licenseViewModel = LicenseViewModel()
