@@ -52,7 +52,7 @@ class HotkeyManager: ObservableObject {
         }
     }
     
-    private let logger = Logger(subsystem: "com.metrovoc.voiceink", category: "HotkeyManager")
+    private let logger = Logger(subsystem: AppIdentity.loggerSubsystem, category: "HotkeyManager")
     private var engine: VoiceInkEngine
     private var recorderUIManager: RecorderUIManager
     private var miniRecorderShortcutManager: MiniRecorderShortcutManager

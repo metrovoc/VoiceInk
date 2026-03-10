@@ -62,19 +62,18 @@ jobs:
           xcodebuild -project VoiceInk.xcodeproj \
             -scheme VoiceInk \
             -configuration Release \
+            -xcconfig LocalBuild.xcconfig \
             -derivedDataPath build \
             CODE_SIGN_IDENTITY="-" \
             CODE_SIGNING_REQUIRED=NO \
-            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_ALLOWED=YES \
+            CODE_SIGN_ENTITLEMENTS="$GITHUB_WORKSPACE/VoiceInk/VoiceInk.local.entitlements" \
+            SWIFT_ACTIVE_COMPILATION_CONDITIONS='$(inherited) LOCAL_BUILD' \
             MARKETING_VERSION="$VERSION" \
             CURRENT_PROJECT_VERSION="$BUILD_NUM"
 
-      - name: Ad-hoc sign the app
+      - name: Verify app signature
         run: |
-          # Re-sign with proper ad-hoc signature (deep signs all nested frameworks/XPCs)
-          # This fixes Sparkle update validation which fails when resources aren't sealed
-          codesign --deep --force --sign - "build/Build/Products/Release/VoiceInk-CE.app"
-          # Verify the signature is valid
           codesign --verify --deep --strict --verbose=2 "build/Build/Products/Release/VoiceInk-CE.app"
 
       - name: Create DMG

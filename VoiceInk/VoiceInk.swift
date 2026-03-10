@@ -47,7 +47,7 @@ struct VoiceInkApp: App {
             UserDefaults.standard.set(hasEnabledPowerModes, forKey: "powerModeUIFlag")
         }
 
-        let logger = Logger(subsystem: "com.metrovoc.voiceink", category: "Initialization")
+        let logger = Logger(subsystem: AppIdentity.loggerSubsystem, category: "Initialization")
         let schema = Schema([
             Transcription.self,
             VocabularyWord.self,
@@ -101,9 +101,7 @@ struct VoiceInkApp: App {
         _enhancementService = StateObject(wrappedValue: enhancementService)
 
         // 1. Create modelsDirectory URL
-        let appSupportDirectory = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("com.metrovoc.VoiceInk")
-        let modelsDirectory = appSupportDirectory.appendingPathComponent("WhisperModels")
+        let modelsDirectory = AppPaths.modelsDirectory
 
         // 2. Create model managers
         let whisperModelManager = WhisperModelManager(modelsDirectory: modelsDirectory)
@@ -177,16 +175,10 @@ struct VoiceInkApp: App {
 
     private static func createPersistentContainer(schema: Schema, logger: Logger) -> ModelContainer? {
         do {
-            // Create app-specific Application Support directory URL
-            let appSupportURL = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-                .appendingPathComponent("com.metrovoc.VoiceInk", isDirectory: true)
+            try AppPaths.ensureApplicationSupportDirectoryExists(logger: logger)
 
-            // Create the directory if it doesn't exist
-            try? FileManager.default.createDirectory(at: appSupportURL, withIntermediateDirectories: true)
-
-            // Define storage locations
-            let defaultStoreURL = appSupportURL.appendingPathComponent("default.store")
-            let dictionaryStoreURL = appSupportURL.appendingPathComponent("dictionary.store")
+            let defaultStoreURL = AppPaths.applicationSupportDirectory.appendingPathComponent("default.store")
+            let dictionaryStoreURL = AppPaths.applicationSupportDirectory.appendingPathComponent("dictionary.store")
 
             // Transcript configuration
             let transcriptSchema = Schema([Transcription.self])
@@ -197,25 +189,48 @@ struct VoiceInkApp: App {
                 cloudKitDatabase: .none
             )
 
-            // Dictionary configuration
             let dictionarySchema = Schema([VocabularyWord.self, WordReplacement.self, TextRule.self])
             #if LOCAL_BUILD
-            let dictionaryCloudKit: ModelConfiguration.CloudKitDatabase = .none
-            #else
-            let dictionaryCloudKit: ModelConfiguration.CloudKitDatabase = .private("iCloud.com.metrovoc.VoiceInk")
-            #endif
             let dictionaryConfig = ModelConfiguration(
                 "dictionary",
                 schema: dictionarySchema,
                 url: dictionaryStoreURL,
-                cloudKitDatabase: dictionaryCloudKit
+                cloudKitDatabase: .none
             )
 
-            // Initialize container
             return try ModelContainer(
                 for: schema,
                 configurations: transcriptConfig, dictionaryConfig
             )
+            #else
+            let syncedDictionaryConfig = ModelConfiguration(
+                "dictionary",
+                schema: dictionarySchema,
+                url: dictionaryStoreURL,
+                cloudKitDatabase: .private(AppIdentity.cloudKitContainerIdentifier)
+            )
+
+            do {
+                return try ModelContainer(
+                    for: schema,
+                    configurations: transcriptConfig, syncedDictionaryConfig
+                )
+            } catch {
+                logger.warning("Failed to create CloudKit-backed dictionary store, retrying with local-only storage: \(error.localizedDescription, privacy: .public)")
+
+                let localDictionaryConfig = ModelConfiguration(
+                    "dictionary",
+                    schema: dictionarySchema,
+                    url: dictionaryStoreURL,
+                    cloudKitDatabase: .none
+                )
+
+                return try ModelContainer(
+                    for: schema,
+                    configurations: transcriptConfig, localDictionaryConfig
+                )
+            }
+            #endif
         } catch {
             logger.error("❌ Failed to create persistent ModelContainer: \(error.localizedDescription, privacy: .public)")
             return nil
