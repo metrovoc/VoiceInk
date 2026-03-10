@@ -52,7 +52,7 @@ final class StreamingTranscriptionSession: TranscriptionSession {
     private let fallbackService: TranscriptionService
     private var model: (any TranscriptionModel)?
     private var streamingFailed = false
-    private let logger = Logger(subsystem: "com.metrovoc.voiceink", category: "StreamingTranscriptionSession")
+    private let logger = Logger(subsystem: AppIdentity.loggerSubsystem, category: "StreamingTranscriptionSession")
 
     init(streamingService: StreamingTranscriptionService, fallbackService: TranscriptionService) {
         self.streamingService = streamingService

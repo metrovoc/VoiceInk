@@ -58,21 +58,21 @@ local: check setup
 		CODE_SIGN_ENTITLEMENTS=$(CURDIR)/VoiceInk/VoiceInk.local.entitlements \
 		SWIFT_ACTIVE_COMPILATION_CONDITIONS='$$(inherited) LOCAL_BUILD' \
 		build
-	@APP_PATH="$(LOCAL_DERIVED_DATA)/Build/Products/Debug/VoiceInk.app" && \
-	if [ -d "$$APP_PATH" ]; then \
-		echo "Copying VoiceInk.app to ~/Downloads..."; \
-		rm -rf "$$HOME/Downloads/VoiceInk.app"; \
-		ditto "$$APP_PATH" "$$HOME/Downloads/VoiceInk.app"; \
-		xattr -cr "$$HOME/Downloads/VoiceInk.app"; \
+	@APP_PATH=$$(find "$$HOME/Library/Developer/Xcode/DerivedData" -name "VoiceInk-CE.app" -path "*/Debug/*" -type d | head -1) && \
+	if [ -n "$$APP_PATH" ]; then \
+		echo "Copying VoiceInk-CE.app to ~/Downloads..."; \
+		rm -rf "$$HOME/Downloads/VoiceInk-CE.app"; \
+		ditto "$$APP_PATH" "$$HOME/Downloads/VoiceInk-CE.app"; \
+		xattr -cr "$$HOME/Downloads/VoiceInk-CE.app"; \
 		echo ""; \
-		echo "Build complete! App saved to: ~/Downloads/VoiceInk.app"; \
-		echo "Run with: open ~/Downloads/VoiceInk.app"; \
+		echo "Build complete! App saved to: ~/Downloads/VoiceInk-CE.app"; \
+		echo "Run with: open ~/Downloads/VoiceInk-CE.app"; \
 		echo ""; \
 		echo "Limitations of local builds:"; \
 		echo "  - No iCloud dictionary sync"; \
 		echo "  - No automatic updates (pull new code and rebuild to update)"; \
 	else \
-		echo "Error: Could not find built VoiceInk.app at $$APP_PATH"; \
+		echo "Error: Could not find built VoiceInk-CE.app in DerivedData."; \
 		exit 1; \
 	fi
 
