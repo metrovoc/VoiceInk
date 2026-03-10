@@ -75,6 +75,12 @@ jobs:
       - name: Verify app signature
         run: |
           codesign --verify --deep --strict --verbose=2 "build/Build/Products/Release/VoiceInk-CE.app"
+          SIGNATURE_INFO=$(codesign -dvvv "build/Build/Products/Release/VoiceInk-CE.app" 2>&1)
+          printf '%s\n' "$SIGNATURE_INFO"
+          if printf '%s\n' "$SIGNATURE_INFO" | grep -q '(adhoc,runtime)'; then
+            echo "Ad-hoc release unexpectedly enabled hardened runtime"
+            exit 1
+          fi
 
       - name: Create DMG
         run: |
