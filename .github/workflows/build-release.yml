@@ -44,8 +44,8 @@ jobs:
 
       - name: Link whisper.cpp for Xcode
         run: |
-          mkdir -p ../VoiceInk-Dependencies
-          ln -sf "$GITHUB_WORKSPACE/VoiceInk-Dependencies/whisper.cpp" ../VoiceInk-Dependencies/whisper.cpp
+          mkdir -p "$HOME/VoiceInk-Dependencies"
+          ln -sf "$GITHUB_WORKSPACE/VoiceInk-Dependencies/whisper.cpp" "$HOME/VoiceInk-Dependencies/whisper.cpp"
 
       - name: Determine version
         run: |
