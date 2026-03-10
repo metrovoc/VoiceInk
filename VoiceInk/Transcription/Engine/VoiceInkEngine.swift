@@ -45,7 +45,7 @@ class VoiceInkEngine: NSObject, ObservableObject {
     let assistantChat: AssistantChatService?
     private let pipeline: TranscriptionPipeline
 
-    let logger = Logger(subsystem: "com.metrovoc.voiceink", category: "VoiceInkEngine")
+    let logger = Logger(subsystem: AppIdentity.loggerSubsystem, category: "VoiceInkEngine")
 
     init(
         modelContext: ModelContext,
@@ -66,9 +66,7 @@ class VoiceInkEngine: NSObject, ObservableObject {
             self.assistantChat = nil
         }
 
-        let appSupportDirectory = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("com.metrovoc.VoiceInk")
-        self.recordingsDirectory = appSupportDirectory.appendingPathComponent("Recordings")
+        self.recordingsDirectory = AppPaths.recordingsDirectory
 
         self.serviceRegistry = TranscriptionServiceRegistry(
             modelProvider: whisperModelManager,

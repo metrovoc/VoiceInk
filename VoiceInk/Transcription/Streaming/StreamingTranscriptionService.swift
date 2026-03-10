@@ -78,7 +78,7 @@ enum StreamingState {
 @MainActor
 class StreamingTranscriptionService {
 
-    private let logger = Logger(subsystem: "com.metrovoc.voiceink", category: "StreamingTranscriptionService")
+    private let logger = Logger(subsystem: AppIdentity.loggerSubsystem, category: "StreamingTranscriptionService")
     private var provider: StreamingTranscriptionProvider?
     private var sendTask: Task<Void, Never>?
     private var eventConsumerTask: Task<Void, Never>?
