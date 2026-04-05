@@ -14,6 +14,7 @@ permissions:
   contents: write
   pull-requests: write
   issues: write
+  id-token: write
 
 jobs:
   sync-main:
@@ -145,55 +146,24 @@ jobs:
           claude_args: "--allowedTools Bash,Read,Edit,Write,Glob,Grep"
         continue-on-error: true
 
-      - name: Check result and notify
+      - name: Check result
         if: always()
         run: |
-          # Check if custom was successfully pushed
           git fetch origin custom
-          CUSTOM_SHA=$(git rev-parse origin/custom)
           MAIN_SHA=$(git rev-parse origin/main)
 
-          # Check if custom contains main (rebase successful)
           if git merge-base --is-ancestor $MAIN_SHA origin/custom 2>/dev/null; then
             echo "✅ Rebase successful!"
             exit 0
           fi
 
-          # Rebase failed - create issue
-          echo "❌ Rebase failed, creating issue..."
-
-          gh issue create \
-            --title "🔧 Manual intervention needed: rebase conflict" \
-            --body "$(cat <<EOF
-          ## Upstream Sync Failed
-
-          The automatic rebase of \`custom\` onto \`main\` encountered conflicts that couldn't be resolved automatically.
-
-          **Conflict files:**
-          \`\`\`
-          ${CONFLICT_FILES}
-          \`\`\`
-
-          **Claude Status:** ${CLAUDE_OUTCOME}
-
-          ### To resolve manually:
-          \`\`\`bash
-          git fetch origin
-          git checkout custom
-          git rebase origin/main
-          # resolve conflicts
-          git rebase --continue
-          git push origin custom --force-with-lease
-          \`\`\`
-
-          **Workflow run:** ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-          EOF
-          )" \
-            --label "sync-conflict"
+          echo "❌ Rebase failed"
+          echo "Claude outcome: ${CLAUDE_OUTCOME}"
+          echo "Conflict files: ${CONFLICT_FILES}"
+          exit 1
         env:
           CLAUDE_OUTCOME: ${{ steps.claude.outcome }}
           CONFLICT_FILES: ${{ needs.rebase-custom.outputs.conflict_files }}
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   notify-no-changes:
     needs: sync-main
