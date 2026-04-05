@@ -110,7 +110,7 @@ class ImportExportService {
         // Fetch text rules from SwiftData
         var exportedTextRules: [TextRuleData]? = nil
         let textRulesDescriptor = FetchDescriptor<TextRule>()
-        if let rules = try? whisperState.modelContext.fetch(textRulesDescriptor), !rules.isEmpty {
+        if let rules = try? modelContext.fetch(textRulesDescriptor), !rules.isEmpty {
             exportedTextRules = rules.map { TextRuleData(pattern: $0.pattern, replacement: $0.replacement, matchMode: $0.matchMode.rawValue, isEnabled: $0.isEnabled) }
         }
 
@@ -291,7 +291,7 @@ class ImportExportService {
                     // Import text rules to SwiftData
                     if let rulesToImport = importedSettings.textRules {
                         let textRulesDescriptor = FetchDescriptor<TextRule>()
-                        let existingRules = (try? whisperState.modelContext.fetch(textRulesDescriptor)) ?? []
+                        let existingRules = (try? modelContext.fetch(textRulesDescriptor)) ?? []
                         let existingPatternsSet = Set(existingRules.map { $0.pattern.lowercased() })
 
                         for ruleData in rulesToImport {
@@ -303,10 +303,10 @@ class ImportExportService {
                                     matchMode: matchMode,
                                     isEnabled: ruleData.isEnabled
                                 )
-                                whisperState.modelContext.insert(newRule)
+                                modelContext.insert(newRule)
                             }
                         }
-                        try? whisperState.modelContext.save()
+                        try? modelContext.save()
                         print("Successfully imported text rules to SwiftData.")
                     } else {
                         print("No text rules found in the imported file. Existing rules remain unchanged.")
