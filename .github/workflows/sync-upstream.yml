@@ -120,24 +120,42 @@ jobs:
             Git rebase of 'custom' onto 'main' has conflicts.
             Conflict files: ${{ needs.rebase-custom.outputs.conflict_files }}
 
+            ## Context
+            This is a Swift/macOS Xcode project. You cannot run xcodebuild here
+            (Ubuntu runner), so you must verify correctness via grep/search instead.
+
             ## Your Task
 
             1. Run `git fetch origin && git checkout custom && git rebase origin/main`
-            2. For each conflict:
+            2. For each conflict, resolve one commit at a time:
                - Understand the INTENT of both changes
-               - Our custom changes represent intentional modifications - preserve them
+               - Our custom changes (on 'custom' branch) represent intentional
+                 modifications — preserve them
                - Upstream changes are improvements we want to incorporate
-               - Resolve intelligently, adapting our customizations to upstream's new structure
+               - Resolve intelligently, adapting our customizations to upstream's
+                 new structure
+               - After resolving all files for a commit, run `git add` then
+                 `git rebase --continue` before moving to the next commit
 
-            3. If you encounter a DESIGN CONFLICT (upstream intentionally removed/replaced
-               something we customized, making our changes incompatible), stop and output:
+            3. **CRITICAL — Handle deleted/moved files:**
+               When a conflict involves a file that was DELETED or MOVED by
+               upstream (modify/delete conflict), you MUST:
+               - Grep the entire codebase for references to symbols, types, and
+                 imports from that file (class names, function names, variables)
+               - Update or remove all dangling references in OTHER files
+               - Check for import statements referencing removed modules
+               This is the #1 source of build failures after rebase.
+
+            4. If you encounter a DESIGN CONFLICT (upstream intentionally
+               removed/replaced something we customized, making our changes
+               fundamentally incompatible), stop and output:
                ```
-               DESIGN_CONFLICT: <file> - <brief description of the conflict>
+               DESIGN_CONFLICT: <file> - <brief description>
                ```
 
-            4. After resolving all conflicts:
-               - Run `git rebase --continue`
-               - Verify the build still works if there's a build script
+            5. After all conflicts are resolved and rebase is complete:
+               - Do a final grep for any obvious issues: references to deleted
+                 files, unresolved conflict markers (<<<<<<), duplicate imports
                - Push with `git push origin custom --force-with-lease`
 
             ## Guidelines

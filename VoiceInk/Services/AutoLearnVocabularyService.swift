@@ -9,7 +9,7 @@ final class AutoLearnVocabularyService {
     static let shared = AutoLearnVocabularyService()
     private init() {}
 
-    private let logger = Logger(subsystem: "com.prakashjoshipax.voiceink", category: "AutoLearnVocabulary")
+    private let logger = Logger(subsystem: "com.metrovoc.voiceink", category: "AutoLearnVocabulary")
 
     // Active monitoring state
     private var pastedText: String = ""
