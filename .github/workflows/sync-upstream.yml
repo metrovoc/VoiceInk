@@ -165,6 +165,46 @@ jobs:
           CLAUDE_OUTCOME: ${{ steps.claude.outcome }}
           CONFLICT_FILES: ${{ needs.rebase-custom.outputs.conflict_files }}
 
+  auto-release:
+    needs: [sync-main, rebase-custom, claude-resolve]
+    if: always() && needs.sync-main.outputs.has_changes == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Verify rebase success
+        run: |
+          git fetch origin custom main
+          MAIN_SHA=$(git rev-parse origin/main)
+          if ! git merge-base --is-ancestor $MAIN_SHA origin/custom 2>/dev/null; then
+            echo "Rebase not successful, skipping release"
+            exit 1
+          fi
+
+      - name: Determine version and trigger release
+        run: |
+          YY=$(date -u +%-y)
+          MM=$(date -u +%-m)
+          PREFIX="v${YY}.${MM}."
+
+          # Find highest patch for this year.month
+          PATCH=0
+          for tag in $(git tag -l "${PREFIX}*"); do
+            P="${tag#$PREFIX}"
+            if [ "$P" -gt "$PATCH" ] 2>/dev/null; then
+              PATCH="$P"
+            fi
+          done
+          PATCH=$((PATCH + 1))
+
+          VERSION="${YY}.${MM}.${PATCH}"
+          echo "Releasing v${VERSION}"
+          gh workflow run "Build Release" --ref custom -f version="$VERSION"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
   notify-no-changes:
     needs: sync-main
     if: needs.sync-main.outputs.has_changes == 'false'
