@@ -3,12 +3,12 @@
   <channel>
     <title>VoiceInk (Custom)</title>
     <item>
-      <title>26.4.7</title>
-      <pubDate>Mon, 20 Apr 2026 08:10:01 +0000</pubDate>
-      <sparkle:version>2647</sparkle:version>
-      <sparkle:shortVersionString>26.4.7</sparkle:shortVersionString>
+      <title>26.4.8</title>
+      <pubDate>Tue, 21 Apr 2026 07:54:02 +0000</pubDate>
+      <sparkle:version>2648</sparkle:version>
+      <sparkle:shortVersionString>26.4.8</sparkle:shortVersionString>
       <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
-      <enclosure url="https://github.com/metrovoc/VoiceInk/releases/download/v26.4.7/VoiceInk-CE.dmg" length="11337701" type="application/octet-stream" sparkle:edSignature="4F49nsv54obzLibPVj89hIZtHTXpZlUQc1ZXS7w/fpy0c7GR0k3PxZASB48v5t79I6FA0WlJ59mx8It8mJdkCA=="/>
+      <enclosure url="https://github.com/metrovoc/VoiceInk/releases/download/v26.4.8/VoiceInk-CE.dmg" length="11353553" type="application/octet-stream" sparkle:edSignature="q2aw8rzunQTygOVksqHSBaWavVRaPiGWrizMnFWFWm/UPAcL96Dnq0+xD8Upy+B2Jf2/qWcrWHHIbZnPBz8lBg=="/>
     </item>
   </channel>
 </rss>
