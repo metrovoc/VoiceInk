@@ -6,14 +6,14 @@
 
 ## Branches
 - `custom` - **Default branch**, contains our customizations
-- `main` - Mirror of upstream/main, auto-synced daily
+- `main` - Mirror of upstream/main, updated by local Codex Automation
 
 ## Automation
-- `.github/workflows/sync-upstream.yml` - Daily sync workflow
-  - Syncs `main` from upstream
-  - Rebases `custom` onto `main`
-  - Uses Claude Code Action (OAuth) to resolve conflicts
-  - Creates GitHub issue if manual intervention needed
+- Local Codex Automation runs the upstream sync every two weeks
+  - Mirrors `main` from upstream
+  - Rebases `custom` onto `main` in a local worktree
+  - Uses local macOS/Xcode checks before updating the fork
+- `.github/workflows/build-release.yml` remains available for release builds
 
 ## Git Remotes
 - `origin` - metrovoc/VoiceInk (this fork)
