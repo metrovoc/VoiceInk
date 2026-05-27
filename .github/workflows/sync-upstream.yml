@@ -1,8 +1,8 @@
 name: Sync Upstream
 
+# Scheduled upstream syncs now run through local Codex Automation.
+# Keep this workflow manual-only as an emergency fallback.
 on:
-  schedule:
-    - cron: '0 6 * * *'  # Daily at 6:00 UTC
   workflow_dispatch:
     inputs:
       force_sync:
