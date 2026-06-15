@@ -103,7 +103,7 @@ struct TextRulesContentView: View {
                     }
                     .frame(maxHeight: 300)
                 }
-                .background(CardBackground(isSelected: false))
+                .background(AppCardBackground(isSelected: false))
             } else {
                 VStack(spacing: 12) {
                     Image(systemName: "doc.text.magnifyingglass")
@@ -114,7 +114,7 @@ struct TextRulesContentView: View {
                         .foregroundColor(.secondary)
                 }
                 .frame(maxWidth: .infinity, minHeight: 150)
-                .background(CardBackground(isSelected: false))
+                .background(AppCardBackground(isSelected: false))
             }
 
             // Preview section
