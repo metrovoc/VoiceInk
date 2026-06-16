@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Version number (e.g. 1.70)'
+        description: 'Version number (e.g. 26.6.1)'
         required: true
 
 permissions:
@@ -17,6 +17,9 @@ jobs:
     runs-on: macos-26
     steps:
       - uses: actions/checkout@v4
+
+      - name: Test release versioning
+        run: scripts/test-release-versioning.sh
 
       - name: Get whisper.cpp latest release tag
         id: whisper-version
@@ -54,8 +57,9 @@ jobs:
           else
             VERSION="${GITHUB_REF_NAME#v}"
           fi
-          echo "VERSION=$VERSION" >> $GITHUB_ENV
-          echo "BUILD_NUM=${VERSION//./}" >> $GITHUB_ENV
+          BUILD_NUM="$(scripts/release-build-number.sh "$VERSION")"
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+          echo "BUILD_NUM=$BUILD_NUM" >> "$GITHUB_ENV"
 
       - name: Build VoiceInk
         run: |
@@ -143,6 +147,15 @@ jobs:
           sed -i '' "s|SIZE_PLACEHOLDER|$SIZE|g" appcast.xml
           sed -i '' "s|SIG_PLACEHOLDER|$SPARKLE_SIGNATURE|g" appcast.xml
           sed -i '' "s|URL_PLACEHOLDER|https://github.com/${{ github.repository }}/releases/download/v$VERSION/VoiceInk-CE.dmg|g" appcast.xml
+
+      - name: Validate release metadata
+        run: |
+          scripts/validate-release-metadata.sh \
+            --app "build/Build/Products/Release/VoiceInk-CE.app" \
+            --appcast appcast.xml \
+            --version "$VERSION" \
+            --build "$BUILD_NUM" \
+            --previous-appcast-url "https://metrovoc.github.io/VoiceInk/appcast.xml"
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
