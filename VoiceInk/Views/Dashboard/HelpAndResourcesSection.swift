@@ -9,24 +9,24 @@ struct HelpAndResourcesSection: View {
 
             VStack(alignment: .leading, spacing: 10) {
                 resourceLink(
-                    icon: "sparkles",
-                    title: "Recommended Models",
-                    color: AppTheme.Sidebar.models,
-                    url: "https://tryvoiceink.com/recommended-models"
-                )
-
-                resourceLink(
-                    icon: "video.fill",
-                    title: "YouTube Videos & Guides",
-                    color: AppTheme.Sidebar.dashboard,
-                    url: "https://www.youtube.com/@tryvoiceink/videos"
-                )
-
-                resourceLink(
                     icon: "book.fill",
                     title: "Documentation",
+                    color: AppTheme.Sidebar.models,
+                    url: AppLinks.documentation
+                )
+
+                resourceLink(
+                    icon: "list.bullet.clipboard.fill",
+                    title: "Changelog",
+                    color: AppTheme.Sidebar.dashboard,
+                    url: AppLinks.releases
+                )
+
+                resourceLink(
+                    icon: "chevron.left.forwardslash.chevron.right",
+                    title: "Source Code",
                     color: AppTheme.Sidebar.dictionary,
-                    url: "https://tryvoiceink.com/docs"
+                    url: AppLinks.repository
                 )
                 
                 resourceLink(
@@ -34,7 +34,7 @@ struct HelpAndResourcesSection: View {
                     title: "Feedback or Issues?",
                     color: AppTheme.Sidebar.audio,
                     action: {
-                        EmailSupport.openSupportEmail()
+                        IssueReporter.openFeedbackPage()
                     }
                 )
             }
@@ -43,11 +43,11 @@ struct HelpAndResourcesSection: View {
         .background(AppCardBackground(cornerRadius: 28))
     }
     
-    private func resourceLink(icon: String, title: LocalizedStringKey, color: Color, url: String? = nil, action: (() -> Void)? = nil) -> some View {
+    private func resourceLink(icon: String, title: LocalizedStringKey, color: Color, url: URL? = nil, action: (() -> Void)? = nil) -> some View {
         Button(action: {
             if let action = action {
                 action()
-            } else if let urlString = url, let url = URL(string: urlString) {
+            } else if let url {
                 NSWorkspace.shared.open(url)
             }
         }) {

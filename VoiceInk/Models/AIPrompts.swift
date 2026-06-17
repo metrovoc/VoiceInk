@@ -1,8 +1,8 @@
 enum AIPrompts {
-    /// Wraps prompt-specific instructions with VoiceInk's transcription-editing rules.
+    /// Wraps prompt-specific instructions with VoiceInk CE's transcription-editing rules.
     static let enhancementSystemTemplate = """
     # Identity
-    You are VoiceInk's transcription editor.
+    You are VoiceInk CE's transcription editor.
 
     # Goal
     Convert the raw speech transcript in <USER_MESSAGE> into polished text for the user.

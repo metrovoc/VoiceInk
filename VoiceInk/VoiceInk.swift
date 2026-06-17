@@ -66,7 +66,7 @@ struct VoiceInkApp: App {
                 DispatchQueue.main.async {
                     let alert = NSAlert()
                     alert.messageText = String(localized: "Storage Warning")
-                    alert.informativeText = String(localized: "VoiceInk couldn't access its storage location. Your transcriptions will not be saved between sessions.")
+                    alert.informativeText = String(localized: "VoiceInk CE couldn't access its storage location. Your transcriptions will not be saved between sessions.")
                     alert.alertStyle = .warning
                     alert.addButton(withTitle: String(localized: "OK"))
                     alert.runModal()
@@ -75,7 +75,7 @@ struct VoiceInkApp: App {
                 let persistentDetail = Self.fullErrorDescription(persistentError)
                 let memoryDetail = Self.fullErrorDescription(memoryError)
                 logger.critical("❌ All ModelContainer init attempts failed.\nPersistent:\n\(persistentDetail, privacy: .public)\nIn-memory:\n\(memoryDetail, privacy: .public)")
-                fatalError("VoiceInk failed to initialize storage.\nPersistent:\n\(persistentDetail)\nIn-memory:\n\(memoryDetail)")
+                fatalError("VoiceInk CE failed to initialize storage.\nPersistent:\n\(persistentDetail)\nIn-memory:\n\(memoryDetail)")
             }
         }
 
@@ -345,7 +345,6 @@ struct VoiceInkApp: App {
                         })
                 }
             }
-            .confettiCelebrationPresenter()
         }
         .windowStyle(.hiddenTitleBar)
         .defaultSize(width: 950, height: 730)

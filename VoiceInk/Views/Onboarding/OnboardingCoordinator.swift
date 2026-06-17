@@ -2,8 +2,6 @@ import SwiftUI
 
 @MainActor
 final class OnboardingCoordinator: ObservableObject {
-    let licenseViewModel = LicenseViewModel()
-
     @Published var storedStage: String {
         didSet {
             defaults.set(storedStage, forKey: OnboardingStorageKeys.stage)
@@ -106,15 +104,11 @@ final class OnboardingCoordinator: ObservableObject {
             return OnboardingStage.baseStepCount + activeExperienceSteps.count + contextAwarenessStepCount + 1
         }
 
-        if stage == .license {
-            return OnboardingStage.baseStepCount + activeExperienceSteps.count + contextAwarenessStepCount + 2
-        }
-
         return stage.stepNumber
     }
 
     var totalStepCount: Int {
-        OnboardingStage.baseStepCount + activeExperienceSteps.count + contextAwarenessStepCount + 2
+        OnboardingStage.baseStepCount + activeExperienceSteps.count + contextAwarenessStepCount + 1
     }
 
     var experienceStep: OnboardingExperienceStep {
