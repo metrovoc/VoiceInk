@@ -19,7 +19,7 @@ struct AboutView: View {
                             .padding(.bottom, 4)
                     }
 
-                    Text("Personal modification of VoiceInk")
+                    Text("Personal-use speech-to-text build")
                         .font(.title3)
                         .foregroundStyle(.secondary)
                 }
@@ -28,10 +28,10 @@ struct AboutView: View {
                     Label("Only intended for personal use.", systemImage: "person.crop.circle")
                         .font(.headline)
 
-                    Text("This app is a personal fork of the upstream VoiceInk project. Starting with v26.6.2, upstream is used as a learning reference rather than a code-sync source.")
+                    Text("VoiceInk CE is maintained for local workflow needs, focused reliability work, and small product experiments.")
                         .foregroundStyle(.secondary)
 
-                    Text("Thanks to Pax and the upstream VoiceInk contributors for creating and open-sourcing the original project.")
+                    Text("Starting with v26.6.2, this app follows its own release and design direction.")
                         .foregroundStyle(.secondary)
                 }
                 .padding(24)
@@ -46,8 +46,6 @@ struct AboutView: View {
                 }
                 .frame(maxWidth: 640)
 
-                Link("Original VoiceInk project", destination: URL(string: "https://github.com/Beingpax/VoiceInk")!)
-                    .font(.callout)
             }
             .padding(.vertical, 48)
             .padding(.horizontal, 32)

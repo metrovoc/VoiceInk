@@ -1,20 +1,14 @@
-# ⚠️ This Project Does Not Accept Pull Requests
+# Pull Request Policy
 
-Thank you for your interest in contributing to VoiceInk!
+VoiceInk CE is a personal-use fork. Pull requests are only reviewed when the work was explicitly coordinated before opening.
 
-However, **this project is not currently accepting pull requests.**
+If this PR was not coordinated, please close it and open an issue instead with the bug report, feature request, or documentation correction.
 
-## Please close this PR
+Before a coordinated PR is reviewed, confirm:
 
-## Alternative ways to contribute:
+- [ ] The change fits VoiceInk CE's personal-use scope.
+- [ ] The change is implemented in this fork's architecture rather than copied from upstream by default.
+- [ ] Relevant tests were added or updated.
+- [ ] Relevant build and test commands passed locally.
 
-- 🐛 **Report bugs**: Open an [issue](../../issues) with detailed information
-- 💡 **Suggest features**: Share your ideas via [issues](../../issues) or [discussions](../../discussions)
-- 🍴 **Fork the project**: You're welcome to create and maintain your own fork
-- 📖 **Improve documentation**: Suggest corrections or clarifications via issues
-
-Thank you for understanding, and I appreciate your interest in VoiceInk!
-
----
-
-For more information, see [CONTRIBUTING.md](../CONTRIBUTING.md)
+See [CONTRIBUTING.md](../CONTRIBUTING.md) for repository interaction rules.

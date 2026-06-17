@@ -2,7 +2,7 @@
 
 ## Project Context
 
-- VoiceInk CE is a personal-use fork of [Beingpax/VoiceInk](https://github.com/Beingpax/VoiceInk).
+- VoiceInk CE is a personal-use fork of the original VoiceInk project.
 - Starting with `v26.6.2`, this repository is formally diverged from upstream.
 - Upstream remains valuable as a learning and product-reference source, but it is no longer a branch to sync or rebase onto.
 
@@ -29,4 +29,4 @@
 ## Git Remotes
 
 - `origin` - metrovoc/VoiceInk, this fork.
-- `upstream` - Beingpax/VoiceInk, original project for reference only.
+- `upstream` - original project, reference only.

@@ -1,78 +1,36 @@
-# Contributing to VoiceInk
+# Contributing to VoiceInk CE
 
-First off, thank you for considering contributing to VoiceInk! It's people like you that make VoiceInk such a great tool.
+VoiceInk CE is maintained as a personal-use fork. This repository is public for transparency, reproducible builds, and issue tracking, but it is not run as an open contribution project.
 
-## ⚠️ Pull Requests Not Accepted
+## Accepted Interaction
 
-**As of now, this project is not accepting pull requests.** While VoiceInk is open source and you're welcome to fork and modify it for your own use.
+- Bug reports that affect this fork.
+- Feature requests that describe a concrete local workflow or regression.
+- Documentation corrections reported through issues.
+- Pull requests only when they were explicitly coordinated before opening.
 
-**You can still contribute by:**
-- 🐛 **Reporting bugs** - Open an issue with detailed information
-- 💡 **Suggesting features** - Share your ideas via issues or discussions
-- 🍴 **Forking the project** - Feel free to create your own version
-- 📖 **Improving documentation** - Suggest clarifications or corrections via issues
+Uncoordinated pull requests may be closed without review so the repository stays aligned with its personal-use scope.
 
-Thank you for understanding!
+## Reporting Bugs
 
-## Code of Conduct
+- Check existing issues first.
+- Use the bug report template.
+- Include reproduction steps, expected behavior, actual behavior, system information, and relevant logs.
+- Note whether the issue reproduces on the current VoiceInk CE release.
 
-By participating in this project, you agree to abide by our [Code of Conduct](CODE_OF_CONDUCT.md).
+## Requesting Features
 
-## How Can I Contribute?
+- Use the feature request template.
+- Describe the workflow problem before proposing an implementation.
+- Explain why the change belongs in this fork rather than as a local script, prompt, or configuration change.
 
-### Reporting Bugs
+## Local Development Standard
 
-- Before submitting a bug report, please check if the issue has already been reported
-- Use the bug report template when creating an issue
-- Include as much relevant information as possible
-- Include steps to reproduce the issue
+- Keep changes scoped to this fork's architecture and product direction.
+- Do not sync, rebase, merge, or cherry-pick upstream code by default.
+- Add focused tests for behavior changes and regressions.
+- Run the relevant build and test commands before publishing changes.
 
-### Suggesting Enhancements
+## Conduct
 
-- Open an issue using the feature request template
-- Clearly describe the feature and its benefits
-- Discuss potential implementation approaches
-- Consider the feature's impact on existing functionality
-
-### Development Process
-
-1. Ensure you have all the requirements installed:
-   - macOS 14.4 or later
-   - Latest version of Xcode
-   - Latest version of Swift
-   - whisper.cpp properly set up
-
-2. Follow our coding standards:
-   - Use Swift style guidelines
-   - Write meaningful commit messages
-   - Include comments where necessary
-   - Add tests for new features
-
-3. Testing:
-   - Run existing tests
-   - Add new tests for new functionality
-   - Ensure all tests pass before submitting PR
-
-## Style Guidelines
-
-- Follow Swift style guidelines
-- Use meaningful variable and function names
-- Keep functions focused and concise
-- Comment complex logic
-- Write self-documenting code where possible
-
-## Community
-
-- Join our discussions
-- Help other contributors
-- Share your ideas
-- Be respectful and constructive
-
-## Questions?
-
-If you have any questions or need clarification, feel free to:
-1. Open an issue
-2. Start a discussion
-3. Reach out to the maintainers
-
-Thank you for contributing to VoiceInk! 🎉 
+Repository interactions must stay respectful, specific, and actionable. See [Project Conduct](CODE_OF_CONDUCT.md).
