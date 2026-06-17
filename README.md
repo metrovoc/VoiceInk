@@ -19,6 +19,8 @@ This repository is not an official VoiceInk release channel and does not provide
 ## Positioning
 
 - Personal fork of upstream VoiceInk, not a replacement for the original project.
+- Starting with v26.6.2, this repository is formally diverged from upstream.
+- Upstream changes are learning inputs, not code-sync inputs: if upstream adds a capability, this fork decides how to design and implement that capability locally.
 - Focused on local workflow changes and quality improvements for this fork.
 - Community Edition UI: no Pro upsell, license activation, trial state, affiliate promotion, or upstream commercial support links.
 - Project resources point to this repository: releases for changelog, issues for feedback, and README/build docs for documentation.

@@ -1,0 +1,135 @@
+name: Observe Upstream
+
+on:
+  schedule:
+    - cron: '0 6 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  learning-review:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Fetch upstream
+        run: |
+          git remote add upstream https://github.com/Beingpax/VoiceInk.git || true
+          git fetch upstream main:refs/remotes/upstream/main --tags
+
+      - name: Prepare learning review
+        id: review
+        run: |
+          set -euo pipefail
+
+          upstream_sha="$(git rev-parse upstream/main)"
+          upstream_short="$(git rev-parse --short upstream/main)"
+          fork_sha="$(git rev-parse HEAD)"
+          fork_short="$(git rev-parse --short HEAD)"
+          base_sha="$(git merge-base HEAD upstream/main)"
+
+          {
+            echo "upstream_sha=$upstream_sha"
+            echo "upstream_short=$upstream_short"
+            echo "fork_sha=$fork_sha"
+            echo "fork_short=$fork_short"
+          } >> "$GITHUB_OUTPUT"
+
+          if [ "$base_sha" = "$upstream_sha" ]; then
+            echo "has_changes=false" >> "$GITHUB_OUTPUT"
+            echo "No upstream changes beyond the fork's current ancestry." > upstream-learning-review.md
+            exit 0
+          fi
+
+          echo "has_changes=true" >> "$GITHUB_OUTPUT"
+
+          commit_count="$(git rev-list --count "${base_sha}..upstream/main")"
+          changed_files="$(git diff --name-only "$base_sha" upstream/main | wc -l | tr -d ' ')"
+
+          cat > upstream-learning-review.md <<EOF
+          # Upstream Learning Review
+
+          This repository is formally forked. Upstream VoiceInk is an inspiration
+          source, not a code base to sync into this fork automatically.
+
+          ## Operating Rule
+
+          - Do not fast-forward, reset, rebase, merge, or cherry-pick upstream code by default.
+          - Use upstream changes as product and engineering signals: "they added this capability; how should we design it for VoiceInk CE?"
+          - Any implementation should be designed, reviewed, tested, and committed in this repository's own architecture.
+          - Direct code reuse requires an explicit human decision and a normal review path.
+
+          ## Snapshot
+
+          - Fork HEAD: \`$fork_short\`
+          - Upstream HEAD: \`$upstream_short\`
+          - Merge base: \`$(git rev-parse --short "$base_sha")\`
+          - Upstream commits since merge base: $commit_count
+          - Files changed upstream since merge base: $changed_files
+
+          ## Upstream Commit Subjects
+
+          \`\`\`
+          $(git log --oneline --no-merges --max-count=30 "${base_sha}..upstream/main")
+          \`\`\`
+
+          ## Upstream Diff Stat
+
+          \`\`\`
+          $(git diff --stat "$base_sha" upstream/main | sed -n '1,80p')
+          \`\`\`
+          EOF
+
+      - name: Write job summary
+        run: cat upstream-learning-review.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Create learning issue
+        if: steps.review.outputs.has_changes == 'true'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const upstreamShort = '${{ steps.review.outputs.upstream_short }}';
+            const title = `Upstream learning review: ${upstreamShort}`;
+            const label = 'upstream-learning';
+            const body = fs.readFileSync('upstream-learning-review.md', 'utf8');
+
+            try {
+              await github.rest.issues.getLabel({ owner, repo, name: label });
+            } catch (error) {
+              if (error.status === 404) {
+                await github.rest.issues.createLabel({
+                  owner,
+                  repo,
+                  name: label,
+                  color: '6f42c1',
+                  description: 'Learning-only review of upstream VoiceInk changes'
+                });
+              } else {
+                throw error;
+              }
+            }
+
+            const existing = await github.rest.search.issuesAndPullRequests({
+              q: `repo:${owner}/${repo} is:issue in:title "${title}"`
+            });
+
+            if (existing.data.total_count > 0) {
+              core.info(`Learning issue already exists: ${title}`);
+              return;
+            }
+
+            await github.rest.issues.create({
+              owner,
+              repo,
+              title,
+              body,
+              labels: [label]
+            });

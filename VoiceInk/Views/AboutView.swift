@@ -28,7 +28,7 @@ struct AboutView: View {
                     Label("Only intended for personal use.", systemImage: "person.crop.circle")
                         .font(.headline)
 
-                    Text("This app is a personal fork of the upstream VoiceInk project. It keeps the original app's core idea, adds personal-use changes, and includes local optimizations where they fit this fork's workflow.")
+                    Text("This app is a personal fork of the upstream VoiceInk project. Starting with v26.6.2, upstream is used as a learning reference rather than a code-sync source.")
                         .foregroundStyle(.secondary)
 
                     Text("Thanks to Pax and the upstream VoiceInk contributors for creating and open-sourcing the original project.")

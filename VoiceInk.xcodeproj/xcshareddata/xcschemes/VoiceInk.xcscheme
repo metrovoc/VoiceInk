@@ -16,7 +16,7 @@
             <BuildableReference
                BuildableIdentifier = "primary"
                BlueprintIdentifier = "E11473AF2CBE0F0A00318EE4"
-               BuildableName = "VoiceInk.app"
+               BuildableName = "VoiceInk-CE.app"
                BlueprintName = "VoiceInk"
                ReferencedContainer = "container:VoiceInk.xcodeproj">
             </BuildableReference>
@@ -69,7 +69,7 @@
          <BuildableReference
             BuildableIdentifier = "primary"
             BlueprintIdentifier = "E11473AF2CBE0F0A00318EE4"
-            BuildableName = "VoiceInk.app"
+            BuildableName = "VoiceInk-CE.app"
             BlueprintName = "VoiceInk"
             ReferencedContainer = "container:VoiceInk.xcodeproj">
          </BuildableReference>
@@ -86,7 +86,7 @@
          <BuildableReference
             BuildableIdentifier = "primary"
             BlueprintIdentifier = "E11473AF2CBE0F0A00318EE4"
-            BuildableName = "VoiceInk.app"
+            BuildableName = "VoiceInk-CE.app"
             BlueprintName = "VoiceInk"
             ReferencedContainer = "container:VoiceInk.xcodeproj">
          </BuildableReference>
