@@ -129,7 +129,7 @@ jobs:
           <?xml version="1.0" standalone="yes"?>
           <rss xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle" version="2.0">
             <channel>
-              <title>VoiceInk (Custom)</title>
+              <title>VoiceInk CE</title>
               <item>
                 <title>VERSION_PLACEHOLDER</title>
                 <pubDate>DATE_PLACEHOLDER</pubDate>
