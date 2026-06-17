@@ -15,17 +15,16 @@
 
 ## Branches
 
-- `custom` - primary branch for this fork and the source branch for releases.
-- `main` - retained only as the original upstream-line branch; do not use it for VoiceInk CE work.
-- Feature and fix branches should branch from this fork's current `custom` unless a task explicitly says otherwise.
+- `main` - primary branch for this fork and the source branch for releases.
+- Feature and fix branches should branch from this fork's current `main` unless a task explicitly says otherwise.
 
 ## Automation
 
-- `.github/workflows/observe-upstream.yml` - learning-only upstream observer.
-  - Fetches upstream read-only.
-  - Creates an issue summarizing upstream changes as implementation ideas.
-  - Never syncs, rebases, merges, force-pushes, or releases from upstream.
 - `.github/workflows/build-release.yml` - builds and publishes VoiceInk CE releases for this fork.
+- Codex automation `voiceink-upstream-learning-review` is learning-only.
+  - Fetches upstream read-only.
+  - Summarizes upstream changes as product and engineering ideas.
+  - Never syncs, rebases, merges, cherry-picks, force-pushes, changes branch defaults, or releases from upstream.
 
 ## Git Remotes
 

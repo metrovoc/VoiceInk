@@ -12,7 +12,7 @@ fail() {
 readme="README.md"
 about_view="VoiceInk/Views/AboutView.swift"
 managed_docs=(
-  "CLAUDE.md"
+  "AGENT.md"
   "BUILDING.md"
   "CONTRIBUTING.md"
   "CODE_OF_CONDUCT.md"
