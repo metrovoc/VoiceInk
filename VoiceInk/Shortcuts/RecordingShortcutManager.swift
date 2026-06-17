@@ -86,9 +86,7 @@ class RecordingShortcutManager: ObservableObject {
     }
 
     private static func canHandleShortcutAction(for recordingState: RecordingState) -> Bool {
-        recordingState != .transcribing &&
-        recordingState != .enhancing &&
-        recordingState != .busy
+        RecordingInteractionPolicy.canProcessRecordingShortcut(when: recordingState)
     }
 
     init(engine: VoiceInkEngine, recorderUIManager: RecorderUIManager) {

@@ -212,20 +212,19 @@ struct VoiceInkApp: App {
             )
 
             let dictionarySchema = Schema([VocabularyWord.self, WordReplacement.self, TextRule.self])
-            #if LOCAL_BUILD
-            let dictionaryConfig = ModelConfiguration(
-                "dictionary",
-                schema: dictionarySchema,
-                url: dictionaryStoreURL,
-                cloudKitDatabase: .none
-            )
-
-            // Recorder session metrics configuration
             let statsSchema = Schema([SessionMetric.self])
             let statsConfig = ModelConfiguration(
                 "stats",
                 schema: statsSchema,
                 url: statsStoreURL,
+                cloudKitDatabase: .none
+            )
+
+            #if LOCAL_BUILD
+            let dictionaryConfig = ModelConfiguration(
+                "dictionary",
+                schema: dictionarySchema,
+                url: dictionaryStoreURL,
                 cloudKitDatabase: .none
             )
 
