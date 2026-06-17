@@ -421,7 +421,7 @@ struct PowerModeSection: View {
                 isEnabled: toggleBinding,
                 label: "Power Mode",
                 infoMessage: "Apply custom settings based on active app or website.",
-                infoURL: "https://tryvoiceink.com/docs/power-mode"
+                infoURL: AppLinks.documentation.absoluteString
             ) {
                 Toggle(isOn: $powerModeAutoRestoreEnabled) {
                     HStack(spacing: 4) {

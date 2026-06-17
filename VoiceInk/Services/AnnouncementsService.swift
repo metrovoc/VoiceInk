@@ -10,7 +10,7 @@ final class AnnouncementsService {
     // MARK: - Configuration
 
     // Hosted via GitHub Pages for this repo
-    private let announcementsURL = URL(string: "https://beingpax.github.io/VoiceInk/announcements.json")!
+    private let announcementsURL = AppLinks.announcementsFeed
 
     // Fetch every 4 hours
     private let refreshInterval: TimeInterval = 4 * 60 * 60
@@ -102,5 +102,4 @@ private struct RemoteAnnouncement: Decodable {
     }
 
 }
-
 

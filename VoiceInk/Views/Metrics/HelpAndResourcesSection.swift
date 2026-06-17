@@ -9,28 +9,28 @@ struct HelpAndResourcesSection: View {
 
             VStack(alignment: .leading, spacing: 10) {
                 resourceLink(
-                    icon: "sparkles",
-                    title: "Recommended Models",
-                    url: "https://tryvoiceink.com/recommended-models"
-                )
-
-                resourceLink(
-                    icon: "video.fill",
-                    title: "YouTube Videos & Guides",
-                    url: "https://www.youtube.com/@tryvoiceink/videos"
-                )
-
-                resourceLink(
                     icon: "book.fill",
                     title: "Documentation",
-                    url: "https://tryvoiceink.com/docs"
+                    url: AppLinks.documentation
+                )
+
+                resourceLink(
+                    icon: "list.bullet.clipboard.fill",
+                    title: "Changelog",
+                    url: AppLinks.releases
+                )
+
+                resourceLink(
+                    icon: "chevron.left.forwardslash.chevron.right",
+                    title: "Source Code",
+                    url: AppLinks.repository
                 )
                 
                 resourceLink(
                     icon: "exclamationmark.bubble.fill",
                     title: "Feedback or Issues?",
                     action: {
-                        EmailSupport.openSupportEmail()
+                        IssueReporter.openFeedbackPage()
                     }
                 )
             }
@@ -46,11 +46,11 @@ struct HelpAndResourcesSection: View {
         )
     }
     
-    private func resourceLink(icon: String, title: String, url: String? = nil, action: (() -> Void)? = nil) -> some View {
+    private func resourceLink(icon: String, title: String, url: URL? = nil, action: (() -> Void)? = nil) -> some View {
         Button(action: {
             if let action = action {
                 action()
-            } else if let urlString = url, let url = URL(string: urlString) {
+            } else if let url {
                 NSWorkspace.shared.open(url)
             }
         }) {

@@ -233,8 +233,8 @@ struct MenuBarView: View {
             }
             .disabled(!updaterViewModel.canCheckForUpdates)
             
-            Button("Help and Support") {
-                EmailSupport.openSupportEmail()
+            Button("Feedback and Issues") {
+                IssueReporter.openFeedbackPage()
             }
             
             Divider()

@@ -180,7 +180,7 @@ struct MetricsSetupView: View {
     }
     
     private var helpText: some View {
-        Text("Need help? Check the Help menu for support options")
+        Text("Need help? Use Feedback and Issues from the menu bar")
             .font(.caption)
             .foregroundColor(.secondary)
     }
@@ -207,4 +207,3 @@ struct MetricsSetupView: View {
         )
     }
 }
-

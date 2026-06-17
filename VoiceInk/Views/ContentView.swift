@@ -16,7 +16,7 @@ enum ViewType: String, CaseIterable, Identifiable {
     case audioInput = "Audio Input"
     case dictionary = "Dictionary"
     case settings = "Settings"
-    case license = "VoiceInk Pro"
+    case about = "About"
 
     var id: String { rawValue }
 
@@ -33,7 +33,7 @@ enum ViewType: String, CaseIterable, Identifiable {
         case .audioInput: return "mic.fill"
         case .dictionary: return "character.book.closed.fill"
         case .settings: return "gearshape.fill"
-        case .license: return "checkmark.seal.fill"
+        case .about: return "info.circle.fill"
         }
     }
 }
@@ -67,7 +67,6 @@ struct ContentView: View {
     @AppStorage("powerModeUIFlag") private var powerModeUIFlag = false
     @State private var selectedView: ViewType? = .metrics
     let appVersion = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0.0"
-    @StateObject private var licenseViewModel = LicenseViewModel()
 
     private var visibleViewTypes: [ViewType] {
         ViewType.allCases.filter { viewType in
@@ -95,15 +94,13 @@ struct ContentView: View {
                         Text("VoiceInk")
                             .font(.system(size: 14, weight: .semibold))
 
-                        if case .licensed = licenseViewModel.licenseState {
-                            Text("PRO")
-                                .font(.system(size: 9, weight: .heavy))
-                                .foregroundStyle(.white)
-                                .padding(.horizontal, 4)
-                                .padding(.vertical, 2)
-                                .background(Color.blue)
-                                .cornerRadius(4)
-                        }
+                        Text("CE")
+                            .font(.system(size: 9, weight: .heavy))
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 4)
+                            .padding(.vertical, 2)
+                            .background(Color.blue)
+                            .cornerRadius(4)
 
                         Spacer()
                     }
@@ -164,8 +161,8 @@ struct ContentView: View {
                     selectedView = .settings
                 case "AI Models":
                     selectedView = .models
-                case "VoiceInk Pro":
-                    selectedView = .license
+                case "About", "VoiceInk CE":
+                    selectedView = .about
                 case "History":
                     HistoryWindowController.shared.showHistoryWindow(
                         modelContainer: modelContext.container,
@@ -210,8 +207,8 @@ struct ContentView: View {
             PowerModeView()
         case .settings:
             SettingsView()
-        case .license:
-            LicenseManagementView()
+        case .about:
+            AboutView()
         case .permissions:
             PermissionsView()
         }
@@ -238,4 +235,3 @@ private struct SidebarItemView: View {
         .padding(.horizontal, 2)
     }
 }
-

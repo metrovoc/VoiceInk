@@ -277,7 +277,7 @@ struct PermissionsView: View {
                         },
                         checkPermission: { permissionManager.checkScreenRecordingPermission() },
                         infoTipMessage: "VoiceInk captures on-screen text to understand the context of your voice input, which significantly improves transcription accuracy. Your privacy is important: this data is processed locally and is not stored.",
-                        infoTipLink: "https://tryvoiceink.com/docs/contextual-awareness"
+                        infoTipLink: AppLinks.documentation.absoluteString
                     )
                 }
             }
