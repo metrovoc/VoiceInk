@@ -1,9 +1,9 @@
 [
   {
     "id": "2026-06-17-voiceink-ce-fork",
-    "title": "VoiceInk CE v26.6.3",
-    "description": "VoiceInk CE now keeps upstream attribution in the README only, tightens About page positioning, and enforces the personal-use fork policy in release checks.",
-    "url": "https://github.com/metrovoc/VoiceInk/releases/tag/v26.6.3",
+    "title": "VoiceInk CE v26.6.4",
+    "description": "VoiceInk CE now ships from the custom branch, keeps branch references aligned, and preserves upstream attribution only in the README.",
+    "url": "https://github.com/metrovoc/VoiceInk/releases/tag/v26.6.4",
     "startAt": "2026-06-17T00:00:00Z",
     "endAt": "2026-07-17T00:00:00Z"
   }
