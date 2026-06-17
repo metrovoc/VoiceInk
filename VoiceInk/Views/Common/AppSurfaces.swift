@@ -17,6 +17,8 @@ struct AppCardBackground: View {
     }
 }
 
+typealias CardBackground = AppCardBackground
+
 struct AppMaterialCardBackground: View {
     var isSelected: Bool = false
     var cornerRadius: CGFloat = 12

@@ -50,7 +50,7 @@ final class FileTranscriptionSession: TranscriptionSession {
 /// Streaming session with automatic fallback to file-based upload on failure.
 @MainActor
 final class StreamingTranscriptionSession: TranscriptionSession {
-    private let streamingService: StreamingTranscriptionService
+    private let streamingService: any StreamingTranscriptionServicing
     private let fallbackService: TranscriptionService
     private var model: (any TranscriptionModel)?
     private var context: TranscriptionRequestContext = .currentDefaults
@@ -59,7 +59,7 @@ final class StreamingTranscriptionSession: TranscriptionSession {
     private var startupTaskID: UUID?
     private let logger = Logger(subsystem: AppIdentity.loggerSubsystem, category: "StreamingTranscriptionSession")
 
-    init(streamingService: StreamingTranscriptionService, fallbackService: TranscriptionService) {
+    init(streamingService: any StreamingTranscriptionServicing, fallbackService: TranscriptionService) {
         self.streamingService = streamingService
         self.fallbackService = fallbackService
     }
@@ -74,8 +74,8 @@ final class StreamingTranscriptionSession: TranscriptionSession {
 
         // Return callback immediately; WebSocket connects in background
         let service = streamingService
-        let callback: (Data) -> Void = { [weak service] data in
-            service?.sendAudioChunk(data)
+        let callback: (Data) -> Void = { data in
+            service.sendAudioChunk(data)
         }
 
         startupTask?.cancel()
@@ -122,6 +122,9 @@ final class StreamingTranscriptionSession: TranscriptionSession {
                 let start = Date()
                 logger.notice("Streaming stop/transcribe started model=\(model.displayName, privacy: .public)")
                 let text = try await streamingService.stopAndGetFinalText()
+                guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                    throw StreamingTranscriptionError.emptyTranscript
+                }
                 logger.notice("Streaming transcript received elapsed=\(Date().timeIntervalSince(start), format: .fixed(precision: 3), privacy: .public)s chars=\(text.count, privacy: .public)")
                 return text
             } catch {

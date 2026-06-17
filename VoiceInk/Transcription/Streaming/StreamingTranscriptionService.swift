@@ -74,34 +74,67 @@ enum StreamingState {
     case cancelled
 }
 
+protocol StreamingTranscriptionServicing: AnyObject {
+    @MainActor
+    var isActive: Bool { get }
+
+    @MainActor
+    func startStreaming(model: any TranscriptionModel, context: TranscriptionRequestContext) async throws
+
+    nonisolated func sendAudioChunk(_ data: Data)
+
+    @MainActor
+    func stopAndGetFinalText() async throws -> String
+
+    @MainActor
+    func cancel()
+}
+
 /// Manages a streaming transcription lifecycle: buffers audio chunks, sends them to the provider, and collects the final text.
 @MainActor
-class StreamingTranscriptionService {
+class StreamingTranscriptionService: StreamingTranscriptionServicing {
+    typealias ProviderFactory = (any TranscriptionModel, ModelContext, FluidAudioTranscriptionService?) -> any StreamingTranscriptionProvider
 
     private let logger = Logger(subsystem: AppIdentity.loggerSubsystem, category: "StreamingTranscriptionService")
     private var provider: StreamingTranscriptionProvider?
     private var sendTask: Task<Void, Never>?
+    private var sendLoopFinishedStream: AsyncStream<Void>?
+    private var sendLoopFinishedContinuation: AsyncStream<Void>.Continuation?
     private var eventConsumerTask: Task<Void, Never>?
     private let chunkSource = AudioChunkSource()
     private var state: StreamingState = .idle
     private var committedSegments: [String] = []
     private let modelContext: ModelContext
     private let fluidAudioService: FluidAudioTranscriptionService?
+    private let providerFactory: ProviderFactory
+    private let drainTimeoutNanoseconds: UInt64
+    private let finalCommitTimeoutNanoseconds: UInt64
     private var onPartialTranscript: ((String) -> Void)?
     private let metrics = StreamingMetrics()
     private var stopStartedAt: Date?
     private var firstPartialLogged = false
     private var firstCommitLogged = false
 
-    init(modelContext: ModelContext, fluidAudioService: FluidAudioTranscriptionService? = nil, onPartialTranscript: ((String) -> Void)? = nil) {
+    init(
+        modelContext: ModelContext,
+        fluidAudioService: FluidAudioTranscriptionService? = nil,
+        onPartialTranscript: ((String) -> Void)? = nil,
+        providerFactory: ProviderFactory? = nil,
+        drainTimeoutNanoseconds: UInt64 = 3_000_000_000,
+        finalCommitTimeoutNanoseconds: UInt64 = 10_000_000_000
+    ) {
         self.modelContext = modelContext
         self.fluidAudioService = fluidAudioService
+        self.providerFactory = providerFactory ?? Self.defaultProviderFactory
+        self.drainTimeoutNanoseconds = drainTimeoutNanoseconds
+        self.finalCommitTimeoutNanoseconds = finalCommitTimeoutNanoseconds
         self.onPartialTranscript = onPartialTranscript
     }
 
     deinit {
         onPartialTranscript = nil
         sendTask?.cancel()
+        sendLoopFinishedContinuation?.finish()
         eventConsumerTask?.cancel()
         chunkSource.finish()
         commitSignal?.finish()
@@ -122,7 +155,7 @@ class StreamingTranscriptionService {
         firstPartialLogged = false
         firstCommitLogged = false
 
-        let provider = createProvider(for: model)
+        let provider = providerFactory(model, modelContext, fluidAudioService)
         self.provider = provider
 
         let selectedLanguage = context.language ?? "auto"
@@ -162,7 +195,13 @@ class StreamingTranscriptionService {
         logger.notice("Streaming stop requested receivedChunks=\(beforeDrain.receivedChunks, privacy: .public) sentChunks=\(beforeDrain.sentChunks, privacy: .public) receivedBytes=\(beforeDrain.receivedBytes, privacy: .public) sentBytes=\(beforeDrain.sentBytes, privacy: .public)")
 
         // Finish the chunk source so the send loop drains remaining chunks and exits naturally.
-        await drainRemainingChunks()
+        do {
+            try await drainRemainingChunks()
+        } catch {
+            state = .failed
+            await cleanupStreaming()
+            throw error
+        }
 
         // Set up the commit signal BEFORE sending commit to avoid a race with the response.
         let (signalStream, signalContinuation) = AsyncStream.makeStream(of: Void.self)
@@ -181,7 +220,14 @@ class StreamingTranscriptionService {
         }
 
         // Wait for the server to acknowledge our commit (or timeout)
-        let finalText = await waitForFinalCommit(signalStream: signalStream)
+        let finalText: String
+        do {
+            finalText = try await waitForFinalCommit(signalStream: signalStream)
+        } catch {
+            state = .failed
+            await cleanupStreaming()
+            throw error
+        }
         if let stopStartedAt {
             logger.notice("Streaming stop completed elapsed=\(Date().timeIntervalSince(stopStartedAt), format: .fixed(precision: 3), privacy: .public)s finalChars=\(finalText.count, privacy: .public)")
         }
@@ -200,6 +246,9 @@ class StreamingTranscriptionService {
         eventConsumerTask = nil
         sendTask?.cancel()
         sendTask = nil
+        sendLoopFinishedContinuation?.finish()
+        sendLoopFinishedContinuation = nil
+        sendLoopFinishedStream = nil
         chunkSource.finish()
 
         // Clean up commit signal if waiting
@@ -219,7 +268,11 @@ class StreamingTranscriptionService {
 
     // MARK: - Private
 
-    private func createProvider(for model: any TranscriptionModel) -> StreamingTranscriptionProvider {
+    private static func defaultProviderFactory(
+        model: any TranscriptionModel,
+        modelContext: ModelContext,
+        fluidAudioService: FluidAudioTranscriptionService?
+    ) -> any StreamingTranscriptionProvider {
         if model.provider == .fluidAudio {
             if FluidAudioModelManager.isNemotronModel(named: model.name) {
                 return FluidAudioNemotronStreamingProvider()
@@ -246,28 +299,68 @@ class StreamingTranscriptionService {
         let source = chunkSource
         let provider = provider
         let metrics = metrics
+        let logger = logger
+        let (finishedStream, finishedContinuation) = AsyncStream.makeStream(of: Void.self)
+        sendLoopFinishedStream = finishedStream
+        sendLoopFinishedContinuation = finishedContinuation
 
-        sendTask = Task.detached { [weak self] in
+        sendTask = Task.detached { [finishedContinuation, logger] in
+            defer {
+                finishedContinuation.yield()
+                finishedContinuation.finish()
+            }
             for await chunk in source.stream {
                 do {
                     try await provider?.sendAudioChunk(chunk)
                     metrics.recordSent(chunk.count)
                 } catch {
                     let desc = error.localizedDescription
-                    await MainActor.run {
-                        self?.logger.error("Failed to send audio chunk: \(desc, privacy: .public)")
-                    }
+                    logger.error("Failed to send audio chunk: \(desc, privacy: .public)")
                 }
             }
         }
     }
 
     /// Finishes the chunk source and waits for the send loop to process all remaining buffered chunks.
-    private func drainRemainingChunks() async {
+    private func drainRemainingChunks() async throws {
         let start = Date()
         chunkSource.finish()
-        await sendTask?.value
-        sendTask = nil
+        guard let sendTask else { return }
+        guard let finishedStream = sendLoopFinishedStream else {
+            sendTask.cancel()
+            self.sendTask = nil
+            throw StreamingTranscriptionError.timeout
+        }
+
+        let timeoutNanoseconds = drainTimeoutNanoseconds
+        let drained = await withTaskGroup(of: Bool.self) { group in
+            group.addTask {
+                for await _ in finishedStream {
+                    return true
+                }
+                return false
+            }
+
+            group.addTask {
+                try? await Task.sleep(nanoseconds: timeoutNanoseconds)
+                return false
+            }
+
+            let result = await group.next() ?? false
+            group.cancelAll()
+            return result
+        }
+
+        if !drained {
+            sendTask.cancel()
+            self.sendTask = nil
+            logger.error("Timed out while draining streaming audio chunks")
+            throw StreamingTranscriptionError.timeout
+        }
+
+        self.sendTask = nil
+        sendLoopFinishedContinuation = nil
+        sendLoopFinishedStream = nil
         let snapshot = metrics.snapshot()
         logger.notice("Streaming drain finished elapsed=\(Date().timeIntervalSince(start), format: .fixed(precision: 3), privacy: .public)s receivedChunks=\(snapshot.receivedChunks, privacy: .public) sentChunks=\(snapshot.sentChunks, privacy: .public) receivedBytes=\(snapshot.receivedBytes, privacy: .public) sentBytes=\(snapshot.sentBytes, privacy: .public)")
     }
@@ -333,8 +426,9 @@ class StreamingTranscriptionService {
     }
 
     /// Waits for the server to acknowledge our explicit commit, with a 10-second timeout.
-    private func waitForFinalCommit(signalStream: AsyncStream<Void>) async -> String {
+    private func waitForFinalCommit(signalStream: AsyncStream<Void>) async throws -> String {
         // Race: wait for commit acknowledgment vs timeout
+        let timeoutNanoseconds = finalCommitTimeoutNanoseconds
         let receivedInTime = await withTaskGroup(of: Bool.self) { group in
             group.addTask { @MainActor in
                 for await _ in signalStream {
@@ -344,7 +438,7 @@ class StreamingTranscriptionService {
             }
 
             group.addTask {
-                try? await Task.sleep(nanoseconds: 10_000_000_000) // 10 seconds
+                try? await Task.sleep(nanoseconds: timeoutNanoseconds)
                 return false
             }
 
@@ -360,6 +454,7 @@ class StreamingTranscriptionService {
 
         if !receivedInTime && committedSegments.isEmpty {
             logger.warning("No transcript received from streaming")
+            throw StreamingTranscriptionError.timeout
         }
 
         return committedSegments.isEmpty ? "" : committedSegments.joined(separator: " ")
@@ -371,6 +466,9 @@ class StreamingTranscriptionService {
         eventConsumerTask = nil
         sendTask?.cancel()
         sendTask = nil
+        sendLoopFinishedContinuation?.finish()
+        sendLoopFinishedContinuation = nil
+        sendLoopFinishedStream = nil
         chunkSource.finish()
         commitSignal?.finish()
         commitSignal = nil

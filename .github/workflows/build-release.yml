@@ -150,18 +150,29 @@ jobs:
 
       - name: Validate release metadata
         run: |
+          previous_appcast_args=()
+          previous_appcast_url="https://metrovoc.github.io/VoiceInk/appcast.xml"
+          if curl -fsSL "$previous_appcast_url" -o previous-appcast.xml; then
+            previous_version=$(perl -0ne 'print $1 if m{<sparkle:shortVersionString>([^<]+)</sparkle:shortVersionString>}s' previous-appcast.xml)
+            previous_build=$(perl -0ne 'print $1 if m{<sparkle:version>([^<]+)</sparkle:version>}s' previous-appcast.xml)
+            if [ "$previous_version" != "$VERSION" ] || [ "$previous_build" != "$BUILD_NUM" ]; then
+              previous_appcast_args=(--previous-appcast-url "$previous_appcast_url")
+            fi
+          fi
+
           scripts/validate-release-metadata.sh \
             --app "build/Build/Products/Release/VoiceInk-CE.app" \
             --appcast appcast.xml \
             --version "$VERSION" \
             --build "$BUILD_NUM" \
-            --previous-appcast-url "https://metrovoc.github.io/VoiceInk/appcast.xml"
+            "${previous_appcast_args[@]}"
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           files: VoiceInk-CE.dmg
           tag_name: v${{ env.VERSION }}
+          target_commitish: ${{ github.sha }}
           generate_release_notes: true
 
       - name: Deploy appcast to GitHub Pages

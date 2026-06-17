@@ -1,13 +1,15 @@
 ---
 name: Bug report
-about: Create a report to help us improve
+about: Report a VoiceInk CE defect or regression
 title: ''
 labels: bug
-assignees: Beingpax
+assignees: ''
 
 ---
 
-## 🐛 Bug Report
+## Bug Report
+
+Please report issues that affect VoiceInk CE's current builds.
 
 ### **Describe the bug**
 A clear and concise description of what the bug is.
@@ -21,9 +23,9 @@ A clear and concise description of what you expected to happen.
 ### **Screenshots**
 If applicable, add screenshots to help explain your problem.
 
-> **📋 IMPORTANT: System Information**
+> **Important: System Information**
 >
-> Copy the system information from VoiceInk's **Dashboard tab** (there's a copy button 📋 next to the "Feedback or Issues?" button) and paste it here. This includes all technical details needed for debugging.
+> Copy the system information from VoiceInk CE's **Dashboard tab** and paste it here. This includes the technical details needed for debugging.
 
 ```
 Paste the copied system information here (includes VoiceInk version, macOS version, hardware specs, transcription settings, and all configuration details)
@@ -55,4 +57,4 @@ If possible, include:
 - [ ] I have tried restarting VoiceInk and my Mac
 - [ ] I have included all relevant environment and configuration details
 
-Thank you for helping make VoiceInk better! 🙏
+Thank you for the report.

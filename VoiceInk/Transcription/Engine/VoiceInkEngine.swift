@@ -101,7 +101,7 @@ class VoiceInkEngine: NSObject, ObservableObject {
 
     func toggleRecord(modeId: UUID? = nil, isAssistantFollowUp: Bool = false) async {
         if recordingState == .starting {
-            await cancelRecording()
+            logger.notice("Ignoring recording toggle while startup is in progress")
             return
         }
 
