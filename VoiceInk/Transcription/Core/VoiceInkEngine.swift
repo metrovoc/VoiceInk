@@ -79,6 +79,11 @@ class VoiceInkEngine: NSObject, ObservableObject {
     func toggleRecord(powerModeId: UUID? = nil) async {
         logger.notice("toggleRecord called – state=\(String(describing: self.recordingState), privacy: .public)")
 
+        if recordingState == .starting {
+            logger.notice("toggleRecord ignored while recording startup is in progress")
+            return
+        }
+
         if recordingState == .recording {
             partialTranscript = ""
             recordingState = .transcribing
@@ -122,6 +127,7 @@ class VoiceInkEngine: NSObject, ObservableObject {
             }
             shouldCancelRecording = false
             partialTranscript = ""
+            recordingState = .starting
 
             requestRecordPermission { [self] granted in
                 if granted {
@@ -139,8 +145,10 @@ class VoiceInkEngine: NSObject, ObservableObject {
                             try await self.recorder.startRecording(toOutputFile: permanentURL)
 
                             guard self.recorderUIManager?.isMiniRecorderVisible ?? false, !self.shouldCancelRecording else {
-                                self.recorder.stopRecording()
+                                await self.recorder.stopRecording()
+                                try? FileManager.default.removeItem(at: permanentURL)
                                 self.recordedFile = nil
+                                self.recordingState = .idle
                                 return
                             }
 
@@ -207,10 +215,12 @@ class VoiceInkEngine: NSObject, ObservableObject {
                             self.logger.notice("toggleRecord: calling dismissMiniRecorder from error handler")
                             await self.recorderUIManager?.dismissMiniRecorder()
                             self.recordedFile = nil
+                            self.recordingState = .idle
                         }
                     }
                 } else {
                     logger.error("❌ Recording permission denied.")
+                    recordingState = .idle
                 }
             }
         }

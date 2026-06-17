@@ -6,7 +6,7 @@
 //
 
 import Testing
-@testable import VoiceInk
+@testable import VoiceInk_CE
 
 struct VoiceInkTests {
 

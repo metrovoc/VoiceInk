@@ -98,6 +98,9 @@ final class StreamingTranscriptionSession: TranscriptionSession {
         if !streamingFailed {
             do {
                 let text = try await streamingService.stopAndGetFinalText()
+                guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                    throw StreamingTranscriptionError.emptyTranscript
+                }
                 logger.notice("Streaming transcript received")
                 return text
             } catch {
