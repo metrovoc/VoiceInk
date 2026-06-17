@@ -6,6 +6,6 @@ enum AppLinks {
     static let issues = URL(string: "https://github.com/metrovoc/VoiceInk/issues")!
     static let newIssue = URL(string: "https://github.com/metrovoc/VoiceInk/issues/new")!
     static let documentation = URL(string: "https://github.com/metrovoc/VoiceInk#readme")!
-    static let buildingGuide = URL(string: "https://github.com/metrovoc/VoiceInk/blob/main/BUILDING.md")!
+    static let buildingGuide = URL(string: "https://github.com/metrovoc/VoiceInk/blob/custom/BUILDING.md")!
     static let announcementsFeed = URL(string: "https://metrovoc.github.io/VoiceInk/announcements.json")!
 }

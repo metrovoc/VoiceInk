@@ -15,8 +15,9 @@
 
 ## Branches
 
-- `main` - primary branch for this fork.
-- Feature and fix branches should branch from this fork's current `main` unless a task explicitly says otherwise.
+- `custom` - primary branch for this fork and the source branch for releases.
+- `main` - retained only as the original upstream-line branch; do not use it for VoiceInk CE work.
+- Feature and fix branches should branch from this fork's current `custom` unless a task explicitly says otherwise.
 
 ## Automation
 
