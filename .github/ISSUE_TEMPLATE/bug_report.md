@@ -9,7 +9,7 @@ assignees: ''
 
 ## Bug Report
 
-VoiceInk CE is a personal-use fork. Please report issues that affect this fork's current builds.
+Please report issues that affect VoiceInk CE's current builds.
 
 ### **Describe the bug**
 A clear and concise description of what the bug is.

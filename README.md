@@ -1,7 +1,7 @@
 <div align="center">
   <img src="VoiceInk/Assets.xcassets/AppIcon.appiconset/256-mac.png" width="180" height="180" />
   <h1>VoiceInk CE</h1>
-  <p>Personal-use macOS voice-to-text app based on VoiceInk</p>
+  <p>Speech-to-text for macOS, based on VoiceInk</p>
 
   [![License](https://img.shields.io/badge/License-GPL%20v3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
   ![Platform](https://img.shields.io/badge/platform-macOS%2014.4%2B-brightgreen)
@@ -10,20 +10,7 @@
 
 ---
 
-VoiceInk CE is a personal modification of the upstream [VoiceInk](https://github.com/Beingpax/VoiceInk) project. First, thank you to Pax and the upstream contributors for creating and open-sourcing VoiceInk.
-
-This fork is only intended for personal use. It exists to add personal workflow needs, remove upstream commercial licensing surfaces from this build, and experiment with reliability and performance improvements that fit this fork's usage.
-
-This repository is not an official VoiceInk release channel and does not provide upstream support, commercial licensing, or compatibility guarantees.
-
-## Positioning
-
-- Personal fork of upstream VoiceInk, not a replacement for the original project.
-- Starting with v26.6.2, this repository is formally diverged from upstream.
-- Upstream changes are learning inputs, not code-sync inputs: if upstream adds a capability, this fork decides how to design and implement that capability locally.
-- Focused on local workflow changes and quality improvements for this fork.
-- Community Edition UI: no Pro upsell, license activation, trial state, affiliate promotion, or upstream commercial support links.
-- Project resources point to this repository: releases for changelog, issues for feedback, and README/build docs for documentation.
+VoiceInk CE is a fork of [VoiceInk](https://github.com/Beingpax/VoiceInk). It started from upstream and has since grown its own implementation, conventions, and direction. This is a personal project I maintain for my own use, with no official support or compatibility guarantee.
 
 ## Features
 
@@ -57,7 +44,7 @@ Build instructions are in [BUILDING.md](BUILDING.md).
 
 ## Contributing
 
-This fork is maintained for personal use. Issues are useful for tracking local problems and regressions, but pull requests are not expected unless explicitly coordinated.
+Issues are useful for tracking bugs and regressions. Pull requests aren't expected unless coordinated ahead of time — see [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## License
 
@@ -65,9 +52,7 @@ This project follows the GNU General Public License v3.0. See [LICENSE](LICENSE)
 
 ## Acknowledgments
 
-### Upstream
-
-- [VoiceInk by Pax / Beingpax](https://github.com/Beingpax/VoiceInk) - original application and open-source foundation
+Thanks to Pax and the upstream contributors for creating and open-sourcing [VoiceInk](https://github.com/Beingpax/VoiceInk), which this fork builds on.
 
 ### Core Technology
 

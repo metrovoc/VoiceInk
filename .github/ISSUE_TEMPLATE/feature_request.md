@@ -9,7 +9,7 @@ assignees: ''
 
 ## Feature Request
 
-VoiceInk CE is a personal-use fork. Please describe the workflow need first; implementation details can follow after the problem is clear.
+Please describe the workflow need first; implementation details can follow once the problem is clear.
 
 ### **Describe the feature you'd like**
 A clear and concise description of the feature you want.

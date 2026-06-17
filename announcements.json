@@ -2,7 +2,7 @@
   {
     "id": "2026-06-17-voiceink-ce-fork",
     "title": "VoiceInk CE v26.6.5",
-    "description": "VoiceInk CE now ships from main and keeps upstream learning review read-only in Codex, outside the release path.",
+    "description": "Maintenance update for VoiceInk CE.",
     "url": "https://github.com/metrovoc/VoiceInk/releases/tag/v26.6.5",
     "startAt": "2026-06-17T00:00:00Z",
     "endAt": "2026-07-17T00:00:00Z"

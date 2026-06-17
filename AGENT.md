@@ -1,30 +1,21 @@
 # VoiceInk CE Fork
 
-## Project Context
+## What This Is
 
-- VoiceInk CE is a personal-use fork of the original VoiceInk project.
-- Starting with `v26.6.2`, this repository is formally diverged from upstream.
-- Upstream remains valuable as a learning and product-reference source, but it is no longer a branch to sync or rebase onto.
+- VoiceInk CE is an independent fork of VoiceInk. The code started from upstream but has diverged: it now has its own architecture, conventions, and implementation choices.
+- This repository is the source of truth. Don't assume upstream's structure, patterns, or APIs still match what's here — read this codebase, not upstream, to understand how things actually work.
+- The fork follows upstream's direction and may re-implement features upstream ships, but it does so in this fork's own style.
 
 ## Upstream Policy
 
-- Do not fast-forward, reset, rebase, merge, or cherry-pick upstream code by default.
-- Treat upstream work as prompts for local design: "they added this capability; how should VoiceInk CE implement it?"
-- Any implementation belongs in this fork's architecture, with local tests and normal review.
-- Direct code reuse requires an explicit human decision.
+- Don't fast-forward, reset, rebase, merge, or cherry-pick upstream code by default.
+- Pulling upstream code in is a deliberate, case-by-case decision, and anything that lands here is rewritten to fit this fork's conventions, with local tests and normal review.
+- New work belongs in this fork's architecture — match the surrounding code here, not upstream's patterns.
 
 ## Branches
 
 - `main` - primary branch for this fork and the source branch for releases.
 - Feature and fix branches should branch from this fork's current `main` unless a task explicitly says otherwise.
-
-## Automation
-
-- `.github/workflows/build-release.yml` - builds and publishes VoiceInk CE releases for this fork.
-- Codex automation `voiceink-upstream-learning-review` is learning-only.
-  - Fetches upstream read-only.
-  - Summarizes upstream changes as product and engineering ideas.
-  - Never syncs, rebases, merges, cherry-picks, force-pushes, changes branch defaults, or releases from upstream.
 
 ## Git Remotes
 

@@ -21,9 +21,6 @@ jobs:
       - name: Test release versioning
         run: scripts/test-release-versioning.sh
 
-      - name: Test project positioning
-        run: scripts/test-project-positioning.sh
-
       - name: Get whisper.cpp latest release tag
         id: whisper-version
         run: |

@@ -19,19 +19,16 @@ struct AboutView: View {
                             .padding(.bottom, 4)
                     }
 
-                    Text("Personal-use speech-to-text build")
+                    Text("Speech-to-text for macOS")
                         .font(.title3)
                         .foregroundStyle(.secondary)
                 }
 
                 VStack(alignment: .leading, spacing: 16) {
-                    Label("Only intended for personal use.", systemImage: "person.crop.circle")
+                    Label("A personal fork of VoiceInk", systemImage: "person.crop.circle")
                         .font(.headline)
 
-                    Text("VoiceInk CE is maintained for local workflow needs, focused reliability work, and small product experiments.")
-                        .foregroundStyle(.secondary)
-
-                    Text("Starting with v26.6.2, this app follows its own release and design direction.")
+                    Text("Maintained for local workflow needs, with focused reliability work and small experiments.")
                         .foregroundStyle(.secondary)
                 }
                 .padding(24)

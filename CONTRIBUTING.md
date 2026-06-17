@@ -1,6 +1,6 @@
 # Contributing to VoiceInk CE
 
-VoiceInk CE is maintained as a personal-use fork. This repository is public for transparency, reproducible builds, and issue tracking, but it is not run as an open contribution project.
+VoiceInk CE is a personal project. This repository is public for transparency, reproducible builds, and issue tracking, but it isn't run as an open contribution project.
 
 ## Accepted Interaction
 
@@ -9,7 +9,7 @@ VoiceInk CE is maintained as a personal-use fork. This repository is public for 
 - Documentation corrections reported through issues.
 - Pull requests only when they were explicitly coordinated before opening.
 
-Uncoordinated pull requests may be closed without review so the repository stays aligned with its personal-use scope.
+Uncoordinated pull requests may be closed without review to keep the repository focused.
 
 ## Reporting Bugs
 
