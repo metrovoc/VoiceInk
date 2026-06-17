@@ -191,46 +191,6 @@
         }
       }
     },
-    "%lld days left in trial": {
-      "localizations": {
-        "de": {
-          "variations": {
-            "plural": {
-              "one": {
-                "stringUnit": {
-                  "state": "translated",
-                  "value": "Noch %lld Tag in der Testphase"
-                }
-              },
-              "other": {
-                "stringUnit": {
-                  "state": "translated",
-                  "value": "Noch %lld Tage in der Testphase"
-                }
-              }
-            }
-          }
-        },
-        "en": {
-          "variations": {
-            "plural": {
-              "one": {
-                "stringUnit": {
-                  "state": "translated",
-                  "value": "%lld day left in trial"
-                }
-              },
-              "other": {
-                "stringUnit": {
-                  "state": "translated",
-                  "value": "%lld days left in trial"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
     "%lld Enhancement models": {
       "localizations": {
         "de": {
@@ -1072,36 +1032,6 @@
         }
       }
     },
-    "Activate a license to continue using VoiceInk.": {
-      "localizations": {
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Aktiviere eine Lizenz, um VoiceInk weiter zu verwenden."
-          }
-        }
-      }
-    },
-    "Activate an existing key, purchase a license, or start a 7-day free trial.": {
-      "localizations": {
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Aktiviere einen vorhandenen Schlüssel, kaufe eine Lizenz oder starte eine 7-tägige kostenlose Testversion."
-          }
-        }
-      }
-    },
-    "Activate License": {
-      "localizations": {
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Lizenz aktivieren"
-          }
-        }
-      }
-    },
     "Activating": {
       "localizations": {
         "de": {
@@ -1152,13 +1082,13 @@
         }
       }
     },
-    "Add a custom fine-tuned whisper model to use with VoiceInk. Select the downloaded .bin file.": {
+    "Add a custom fine-tuned whisper model to use with VoiceInk CE. Select the downloaded .bin file.": {
       "extractionState": "manual",
       "localizations": {
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "Ein eigenes, feinjustiertes Whisper-Modell für VoiceInk hinzufügen. Wähle die heruntergeladene .bin-Datei aus."
+            "value": "Ein eigenes, feinjustiertes Whisper-Modell für VoiceInk CE hinzufügen. Wähle die heruntergeladene .bin-Datei aus."
           }
         }
       }
@@ -1285,12 +1215,12 @@
         }
       }
     },
-    "Add microphones in the order VoiceInk should try them.": {
+    "Add microphones in the order VoiceInk CE should try them.": {
       "localizations": {
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "Mikrofone in der Reihenfolge hinzufügen, in der VoiceInk sie verwenden soll."
+            "value": "Mikrofone in der Reihenfolge hinzufügen, in der VoiceInk CE sie verwenden soll."
           }
         }
       }
@@ -1468,27 +1398,6 @@
         }
       }
     },
-    "Affiliate": {
-      "extractionState": "manual",
-      "localizations": {
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Partnerprogramm"
-          }
-        }
-      }
-    },
-    "AFFILIATE 30%": {
-      "localizations": {
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "AFFILIATE 30%"
-          }
-        }
-      }
-    },
     "AI Enhancement": {
       "localizations": {
         "de": {
@@ -1621,12 +1530,12 @@
         }
       }
     },
-    "Allow VoiceInk to work across all your apps.": {
+    "Allow VoiceInk CE to work across all your apps.": {
       "localizations": {
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "Erlaube VoiceInk, in all deinen Apps zu funktionieren."
+            "value": "Erlaube VoiceInk CE, in all deinen Apps zu funktionieren."
           }
         }
       }
@@ -2269,26 +2178,6 @@
         }
       }
     },
-    "Buy License": {
-      "localizations": {
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Lizenz kaufen"
-          }
-        }
-      }
-    },
-    "Buy VoiceInk License": {
-      "localizations": {
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "VoiceInk-Lizenz kaufen"
-          }
-        }
-      }
-    },
     "Cancel": {
       "localizations": {
         "de": {
@@ -2740,12 +2629,12 @@
         }
       }
     },
-    "Control how VoiceInk handles your transcription data and audio recordings.": {
+    "Control how VoiceInk CE handles your transcription data and audio recordings.": {
       "localizations": {
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "Steuere, wie VoiceInk deine Transkriptionsdaten und Audioaufnahmen verwaltet."
+            "value": "Steuere, wie VoiceInk CE deine Transkriptionsdaten und Audioaufnahmen verwaltet."
           }
         }
       }
@@ -2797,16 +2686,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "Letzte Transkription kopieren"
-          }
-        }
-      }
-    },
-    "Copy License Key": {
-      "localizations": {
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Lizenzschlüssel kopieren"
           }
         }
       }
@@ -2911,12 +2790,12 @@
         }
       }
     },
-    "Create first mode to automate your VoiceInk workflow based on apps/website you are using": {
+    "Create first mode to automate your VoiceInk CE workflow based on apps/website you are using": {
       "localizations": {
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "Erstelle deinen ersten Modus, um deinen VoiceInk-Workflow basierend auf verwendeten Apps und Websites zu automatisieren"
+            "value": "Erstelle deinen ersten Modus, um deinen VoiceInk CE-Workflow basierend auf verwendeten Apps und Websites zu automatisieren"
           }
         }
       }
@@ -3100,26 +2979,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "Deaktivieren"
-          }
-        }
-      }
-    },
-    "Deactivate License": {
-      "localizations": {
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Lizenz deaktivieren"
-          }
-        }
-      }
-    },
-    "Deactivate License?": {
-      "localizations": {
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Lizenz deaktivieren?"
           }
         }
       }
@@ -3530,32 +3389,22 @@
         }
       }
     },
-    "Dismiss the VoiceInk recorder and cancel any active recording.": {
+    "Dismiss the VoiceInk CE recorder and cancel any active recording.": {
       "localizations": {
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "VoiceInk-Aufnahme schließen und aktive Aufnahme abbrechen."
+            "value": "VoiceInk CE-Aufnahme schließen und aktive Aufnahme abbrechen."
           }
         }
       }
     },
-    "Dismiss this promotion": {
+    "Dismiss VoiceInk CE Recorder": {
       "localizations": {
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "Dieses Angebot ausblenden"
-          }
-        }
-      }
-    },
-    "Dismiss VoiceInk Recorder": {
-      "localizations": {
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "VoiceInk-Aufnahme schließen"
+            "value": "VoiceInk CE-Aufnahme schließen"
           }
         }
       }
@@ -3790,32 +3639,12 @@
         }
       }
     },
-    "e.g. Prakash, VoiceInk": {
+    "e.g. Alex, VoiceInk CE": {
       "localizations": {
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "z. B. Prakash, VoiceInk"
-          }
-        }
-      }
-    },
-    "e.g. support@tryvoiceink.com": {
-      "localizations": {
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "z. B. support@tryvoiceink.com"
-          }
-        }
-      }
-    },
-    "Earn With The VoiceInk Affiliate Program": {
-      "localizations": {
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Mit dem VoiceInk-Partnerprogramm Geld verdienen"
+            "value": "z. B. Alex, VoiceInk CE"
           }
         }
       }
@@ -4115,26 +3944,6 @@
         }
       }
     },
-    "Enter License": {
-      "localizations": {
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Lizenz eingeben"
-          }
-        }
-      }
-    },
-    "Enter License Key": {
-      "localizations": {
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Lizenzschlüssel eingeben"
-          }
-        }
-      }
-    },
     "Enter word or phrase to replace (use commas for multiple)": {
       "localizations": {
         "de": {
@@ -4166,12 +3975,12 @@
         }
       }
     },
-    "Environment variables available: VOICEINK_SYSTEM_PROMPT, VOICEINK_USER_PROMPT, VOICEINK_FULL_PROMPT. VoiceInk also writes VOICEINK_FULL_PROMPT to stdin for every command.": {
+    "Environment variables available: VOICEINK_SYSTEM_PROMPT, VOICEINK_USER_PROMPT, VOICEINK_FULL_PROMPT. VoiceInk CE also writes VOICEINK_FULL_PROMPT to stdin for every command.": {
       "localizations": {
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "Verfügbare Umgebungsvariablen: VOICEINK_SYSTEM_PROMPT, VOICEINK_USER_PROMPT, VOICEINK_FULL_PROMPT. VoiceInk schreibt außerdem VOICEINK_FULL_PROMPT für jeden Befehl nach stdin."
+            "value": "Verfügbare Umgebungsvariablen: VOICEINK_SYSTEM_PROMPT, VOICEINK_USER_PROMPT, VOICEINK_FULL_PROMPT. VoiceInk CE schreibt außerdem VOICEINK_FULL_PROMPT für jeden Befehl nach stdin."
           }
         }
       }
@@ -4216,12 +4025,12 @@
         }
       }
     },
-    "Experience VoiceInk": {
+    "Experience VoiceInk CE": {
       "localizations": {
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "VoiceInk erleben"
+            "value": "VoiceInk CE erleben"
           }
         }
       }
@@ -4234,16 +4043,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "Experimentell"
-          }
-        }
-      }
-    },
-    "Explore Affiliate": {
-      "localizations": {
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Partnerprogramm erkunden"
           }
         }
       }
@@ -4328,12 +4127,12 @@
         }
       }
     },
-    "Export VoiceInk Settings": {
+    "Export VoiceInk CE Settings": {
       "localizations": {
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "VoiceInk-Einstellungen exportieren"
+            "value": "VoiceInk CE-Einstellungen exportieren"
           }
         }
       }
@@ -4833,22 +4632,12 @@
         }
       }
     },
-    "Have a license key?": {
+    "Have feedback, a bug report, or something that feels off? Send a note with system information by email, or join Discord for community discussion. Every report helps make VoiceInk CE more reliable and easier to use.": {
       "localizations": {
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "Hast du einen Lizenzschlüssel?"
-          }
-        }
-      }
-    },
-    "Have feedback, a bug report, or something that feels off? Send a note with system information by email, or join Discord for community discussion. Every report helps make VoiceInk more reliable and easier to use.": {
-      "localizations": {
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Hast du Feedback, einen Fehlerbericht oder stimmt etwas nicht? Sende eine E-Mail mit Systeminformationen oder tritt dem Discord bei. Jeder Bericht hilft, VoiceInk zuverlässiger und einfacher nutzbar zu machen."
+            "value": "Hast du Feedback, einen Fehlerbericht oder stimmt etwas nicht? Sende eine E-Mail mit Systeminformationen oder tritt dem Discord bei. Jeder Bericht hilft, VoiceInk CE zuverlässiger und einfacher nutzbar zu machen."
           }
         }
       }
@@ -4973,12 +4762,12 @@
         }
       }
     },
-    "Import VoiceInk Settings": {
+    "Import VoiceInk CE Settings": {
       "localizations": {
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "VoiceInk-Einstellungen importieren"
+            "value": "VoiceInk CE-Einstellungen importieren"
           }
         }
       }
@@ -5114,12 +4903,12 @@
         }
       }
     },
-    "It is recommended to restart VoiceInk for all changes to take full effect.": {
+    "It is recommended to restart VoiceInk CE for all changes to take full effect.": {
       "localizations": {
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "Es wird empfohlen, VoiceInk neu zu starten, damit alle Änderungen vollständig wirksam werden."
+            "value": "Es wird empfohlen, VoiceInk CE neu zu starten, damit alle Änderungen vollständig wirksam werden."
           }
         }
       }
@@ -5303,117 +5092,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "Mehr erfahren"
-          }
-        }
-      }
-    },
-    "License activated successfully!": {
-      "localizations": {
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Lizenz erfolgreich aktiviert!"
-          }
-        }
-      }
-    },
-    "License active on this Mac.": {
-      "localizations": {
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Lizenz auf diesem Mac aktiv."
-          }
-        }
-      }
-    },
-    "License key": {
-      "localizations": {
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Lizenzschlüssel"
-          }
-        }
-      }
-    },
-    "License Key": {
-      "localizations": {
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Lizenzschlüssel"
-          }
-        }
-      }
-    },
-    "License key not found. Please double-check your key and try again.": {
-      "localizations": {
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Lizenzschlüssel nicht gefunden. Bitte überprüfe deinen Schlüssel und versuche es erneut."
-          }
-        }
-      }
-    },
-    "License Management": {
-      "localizations": {
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Lizenzverwaltung"
-          }
-        }
-      }
-    },
-    "License required": {
-      "localizations": {
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Lizenz erforderlich"
-          }
-        }
-      }
-    },
-    "License Required": {
-      "localizations": {
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Lizenz erforderlich"
-          }
-        }
-      }
-    },
-    "License validated successfully!": {
-      "localizations": {
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Lizenz erfolgreich validiert!"
-          }
-        }
-      }
-    },
-    "Licensed": {
-      "localizations": {
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Lizenziert"
-          }
-        }
-      }
-    },
-    "Licensed (Pro)": {
-      "extractionState": "manual",
-      "localizations": {
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Lizenziert (Pro)"
           }
         }
       }
@@ -5691,16 +5369,6 @@
         }
       }
     },
-    "Manage License": {
-      "localizations": {
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Lizenz verwalten"
-          }
-        }
-      }
-    },
     "Manage Models": {
       "localizations": {
         "de": {
@@ -5945,12 +5613,12 @@
         }
       }
     },
-    "Modes help you set up VoiceInk for different writing tasks, workflows, and scenarios.": {
+    "Modes help you set up VoiceInk CE for different writing tasks, workflows, and scenarios.": {
       "localizations": {
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "Modi helfen Ihnen, VoiceInk für verschiedene Schreibaufgaben, Arbeitsabläufe und Szenarien einzurichten."
+            "value": "Modi helfen Ihnen, VoiceInk CE für verschiedene Schreibaufgaben, Arbeitsabläufe und Szenarien einzurichten."
           }
         }
       }
@@ -6629,17 +6297,6 @@
         }
       }
     },
-    "Not Licensed": {
-      "extractionState": "manual",
-      "localizations": {
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Nicht lizenziert"
-          }
-        }
-      }
-    },
     "Notch": {
       "localizations": {
         "de": {
@@ -7001,12 +6658,12 @@
         }
       }
     },
-    "Pick the microphone VoiceInk should use for recordings.": {
+    "Pick the microphone VoiceInk CE should use for recordings.": {
       "localizations": {
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "Wähle das Mikrofon aus, das VoiceInk für Aufnahmen verwenden soll."
+            "value": "Wähle das Mikrofon aus, das VoiceInk CE für Aufnahmen verwenden soll."
           }
         }
       }
@@ -7017,16 +6674,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "Wiedergabegeschwindigkeit"
-          }
-        }
-      }
-    },
-    "Please enter a license key": {
-      "localizations": {
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Bitte gib einen Lizenzschlüssel ein"
           }
         }
       }
@@ -7047,16 +6694,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "Bitte starte die Anwendung neu. Wenn das Problem weiterhin besteht, kontaktiere den Support."
-          }
-        }
-      }
-    },
-    "Premium Features Activated": {
-      "localizations": {
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Premium-Funktionen aktiviert"
           }
         }
       }
@@ -7256,17 +6893,6 @@
         }
       }
     },
-    "Purchase License": {
-      "extractionState": "manual",
-      "localizations": {
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Lizenz kaufen"
-          }
-        }
-      }
-    },
     "Push to Talk": {
       "localizations": {
         "de": {
@@ -7307,12 +6933,12 @@
         }
       }
     },
-    "Quit VoiceInk": {
+    "Quit VoiceInk CE": {
       "localizations": {
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "VoiceInk beenden"
+            "value": "VoiceInk CE beenden"
           }
         }
       }
@@ -7628,16 +7254,6 @@
         }
       }
     },
-    "Remove License": {
-      "localizations": {
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Lizenz entfernen"
-          }
-        }
-      }
-    },
     "Remove one reserved language to download %@.": {
       "localizations": {
         "de": {
@@ -7800,12 +7416,12 @@
         }
       }
     },
-    "Required for VoiceInk shortcuts and app-wide controls to work properly.": {
+    "Required for VoiceInk CE shortcuts and app-wide controls to work properly.": {
       "localizations": {
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "Erforderlich für VoiceInk-Tastaturkürzel und app-weite Steuerung."
+            "value": "Erforderlich für VoiceInk CE-Tastaturkürzel und app-weite Steuerung."
           }
         }
       }
@@ -7850,12 +7466,12 @@
         }
       }
     },
-    "Restart VoiceInk after enabling Screen Recording.": {
+    "Restart VoiceInk CE after enabling Screen Recording.": {
       "localizations": {
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "VoiceInk nach dem Aktivieren der Bildschirmaufnahme neu starten."
+            "value": "VoiceInk CE nach dem Aktivieren der Bildschirmaufnahme neu starten."
           }
         }
       }
@@ -7966,17 +7582,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "Eingabe (⏎)"
-          }
-        }
-      }
-    },
-    "Review how VoiceInk handles your data before choosing a license.": {
-      "extractionState": "manual",
-      "localizations": {
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Überprüfe, wie VoiceInk deine Daten handhabt, bevor du eine Lizenz auswählst."
           }
         }
       }
@@ -8487,26 +8092,6 @@
         }
       }
     },
-    "Share VoiceInk on your socials, and instantly unlock a 30% discount on VoiceInk Pro.": {
-      "localizations": {
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Teile VoiceInk in deinen sozialen Netzwerken und schalte sofort 30 % Rabatt auf VoiceInk Pro frei."
-          }
-        }
-      }
-    },
-    "Share VoiceInk with friends or your audience and receive 30% on every referral that upgrades.": {
-      "localizations": {
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Empfiehl VoiceInk Freunden oder deinem Publikum und erhalte 30 % für jede geworbene Person, die ein Upgrade durchführt."
-          }
-        }
-      }
-    },
     "Shift + Return (⇧⏎)": {
       "localizations": {
         "de": {
@@ -8758,23 +8343,12 @@
         }
       }
     },
-    "Start 7-day Trial": {
-      "extractionState": "manual",
+    "Start or stop the VoiceInk CE recorder for voice transcription.": {
       "localizations": {
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "7-tägige Testversion starten"
-          }
-        }
-      }
-    },
-    "Start or stop the VoiceInk recorder for voice transcription.": {
-      "localizations": {
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "VoiceInk-Aufnahme für Sprachtranskription starten oder stoppen."
+            "value": "VoiceInk CE-Aufnahme für Sprachtranskription starten oder stoppen."
           }
         }
       }
@@ -9070,12 +8644,12 @@
         }
       }
     },
-    "Thank you for using VoiceInk": {
+    "Thank you for using VoiceInk CE": {
       "localizations": {
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "Danke, dass du VoiceInk verwendest"
+            "value": "Danke, dass du VoiceInk CE verwendest"
           }
         }
       }
@@ -9180,12 +8754,12 @@
         }
       }
     },
-    "The key worked, but VoiceInk could not save it securely.": {
+    "The key worked, but VoiceInk CE could not save it securely.": {
       "localizations": {
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "Der Schlüssel funktioniert, aber VoiceInk konnte ihn nicht sicher speichern."
+            "value": "Der Schlüssel funktioniert, aber VoiceInk CE konnte ihn nicht sicher speichern."
           }
         }
       }
@@ -9341,42 +8915,12 @@
         }
       }
     },
-    "This license has been revoked or disabled. Please contact support.": {
-      "localizations": {
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Diese Lizenz wurde widerrufen oder deaktiviert. Bitte kontaktiere den Support."
-          }
-        }
-      }
-    },
-    "This license has reached its device limit. Visit the License Management Portal to deactivate other devices.": {
-      "localizations": {
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Diese Lizenz hat ihr Gerätelimit erreicht. Besuche das Lizenzverwaltungsportal, um andere Geräte zu deaktivieren."
-          }
-        }
-      }
-    },
     "This model supports multiple languages. Select a specific language or auto-detect(if available)": {
       "localizations": {
         "de": {
           "stringUnit": {
             "state": "translated",
             "value": "Dieses Modell unterstützt mehrere Sprachen. Wähle eine bestimmte Sprache oder die automatische Erkennung (falls verfügbar)."
-          }
-        }
-      }
-    },
-    "This removes the license from this Mac. You can activate it again later.": {
-      "localizations": {
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Dadurch wird die Lizenz von diesem Mac entfernt. Du kannst sie später wieder aktivieren."
           }
         }
       }
@@ -9524,12 +9068,12 @@
         }
       }
     },
-    "Toggle VoiceInk Recorder": {
+    "Toggle VoiceInk CE Recorder": {
       "localizations": {
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "VoiceInk-Aufnahme umschalten"
+            "value": "VoiceInk CE-Aufnahme umschalten"
           }
         }
       }
@@ -9706,46 +9250,6 @@
         }
       }
     },
-    "Trial Active": {
-      "localizations": {
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Testversion aktiv"
-          }
-        }
-      }
-    },
-    "Trial ended": {
-      "localizations": {
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Testphase beendet"
-          }
-        }
-      }
-    },
-    "Trial Ending Soon": {
-      "localizations": {
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Testversion endet bald"
-          }
-        }
-      }
-    },
-    "Trial Expired": {
-      "localizations": {
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Testversion abgelaufen"
-          }
-        }
-      }
-    },
     "Trigger Words": {
       "comment": "A label displayed above the user's trigger words.",
       "isCommentAutoGenerated": true,
@@ -9778,12 +9282,12 @@
         }
       }
     },
-    "Try a few short samples and see how VoiceInk works before you start.": {
+    "Try a few short samples and see how VoiceInk CE works before you start.": {
       "localizations": {
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "Probiere ein paar kurze Beispiele aus und sieh dir an, wie VoiceInk funktioniert."
+            "value": "Probiere ein paar kurze Beispiele aus und sieh dir an, wie VoiceInk CE funktioniert."
           }
         }
       }
@@ -9825,16 +9329,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "Unbekannt"
-          }
-        }
-      }
-    },
-    "Unlock VoiceInk Pro For Less": {
-      "localizations": {
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "VoiceInk Pro günstiger freischalten"
           }
         }
       }
@@ -9912,13 +9406,13 @@
         }
       }
     },
-    "Use VoiceInk now.": {
+    "Use VoiceInk CE now.": {
       "extractionState": "manual",
       "localizations": {
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "VoiceInk jetzt nutzen."
+            "value": "VoiceInk CE jetzt nutzen."
           }
         }
       }
@@ -10145,262 +9639,252 @@
         }
       }
     },
-    "VoiceInk": {
+    "VoiceInk CE": {
       "localizations": {
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "VoiceInk"
+            "value": "VoiceInk CE"
           }
         }
       }
     },
-    "VoiceInk app is not available": {
+    "VoiceInk CE app is not available": {
       "localizations": {
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "VoiceInk-App ist nicht verfügbar"
+            "value": "VoiceInk CE-App ist nicht verfügbar"
           }
         }
       }
     },
-    "VoiceInk automatically understands what you are working with and selects your preferred setup. You can always configure this by editing or creating new modes.": {
+    "VoiceInk CE automatically understands what you are working with and selects your preferred setup. You can always configure this by editing or creating new modes.": {
       "localizations": {
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "VoiceInk erkennt automatisch, woran du arbeitest, und wählt deine bevorzugte Konfiguration aus. Du kannst dies jederzeit anpassen, indem du Modi bearbeitest oder neue erstellst."
+            "value": "VoiceInk CE erkennt automatisch, woran du arbeitest, und wählt deine bevorzugte Konfiguration aus. Du kannst dies jederzeit anpassen, indem du Modi bearbeitest oder neue erstellst."
           }
         }
       }
     },
-    "VoiceInk can select the right mode from the app you are using and the rules you configure.": {
+    "VoiceInk CE can select the right mode from the app you are using and the rules you configure.": {
       "localizations": {
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "VoiceInk kann anhand der verwendeten App und der konfigurierten Regeln den passenden Modus auswählen."
+            "value": "VoiceInk CE kann anhand der verwendeten App und der konfigurierten Regeln den passenden Modus auswählen."
           }
         }
       }
     },
-    "VoiceInk couldn't access its storage location. Your transcriptions will not be saved between sessions.": {
+    "VoiceInk CE couldn't access its storage location. Your transcriptions will not be saved between sessions.": {
       "localizations": {
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "VoiceInk konnte nicht auf den Speicherort zugreifen. Deine Transkriptionen werden nicht zwischen Sitzungen gespeichert."
+            "value": "VoiceInk CE konnte nicht auf den Speicherort zugreifen. Deine Transkriptionen werden nicht zwischen Sitzungen gespeichert."
           }
         }
       }
     },
-    "VoiceInk Insights": {
+    "VoiceInk CE Insights": {
       "localizations": {
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "VoiceInk-Einblicke"
+            "value": "VoiceInk CE-Einblicke"
           }
         }
       }
     },
-    "VoiceInk is also open source, so you can inspect every single line of code.": {
+    "VoiceInk CE is also open source, so you can inspect every single line of code.": {
       "localizations": {
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "VoiceInk ist auch Open Source, sodass du jede Codezeile einsehen kannst."
+            "value": "VoiceInk CE ist auch Open Source, sodass du jede Codezeile einsehen kannst."
           }
         }
       }
     },
-    "VoiceInk is Context-Aware": {
+    "VoiceInk CE is Context-Aware": {
       "localizations": {
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "VoiceInk erkennt den Kontext"
+            "value": "VoiceInk CE erkennt den Kontext"
           }
         }
       }
     },
-    "VoiceInk is context-aware.": {
+    "VoiceInk CE is context-aware.": {
       "localizations": {
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "VoiceInk erkennt den Kontext."
+            "value": "VoiceInk CE erkennt den Kontext."
           }
         }
       }
     },
-    "VoiceInk is Open Source": {
+    "VoiceInk CE is Open Source": {
       "localizations": {
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "VoiceInk ist Open Source"
+            "value": "VoiceInk CE ist Open Source"
           }
         }
       }
     },
-    "VoiceInk is private by default": {
+    "VoiceInk CE is private by default": {
       "localizations": {
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "VoiceInk ist standardmäßig privat"
+            "value": "VoiceInk CE ist standardmäßig privat"
           }
         }
       }
     },
-    "VoiceInk is private by default. No data leaves your device unless you opt in.": {
+    "VoiceInk CE is private by default. No data leaves your device unless you opt in.": {
       "localizations": {
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "VoiceInk ist standardmäßig privat. Keine Daten verlassen dein Gerät, sofern du dem nicht zustimmst."
+            "value": "VoiceInk CE ist standardmäßig privat. Keine Daten verlassen dein Gerät, sofern du dem nicht zustimmst."
           }
         }
       }
     },
-    "VoiceInk Modes": {
+    "VoiceInk CE Modes": {
       "localizations": {
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "VoiceInk-Modi"
+            "value": "VoiceInk CE-Modi"
           }
         }
       }
     },
-    "VoiceInk modes include Dictation, Enhance, Email, Assistant, Rewrite, Ask, Summarize, and Translate.": {
+    "VoiceInk CE modes include Dictation, Enhance, Email, Assistant, Rewrite, Ask, Summarize, and Translate.": {
       "localizations": {
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "VoiceInk-Modi umfassen Diktat, Verbesserung, E-Mail, Assistent, Umschreiben, Fragen, Zusammenfassen und Übersetzen."
+            "value": "VoiceInk CE-Modi umfassen Diktat, Verbesserung, E-Mail, Assistent, Umschreiben, Fragen, Zusammenfassen und Übersetzen."
           }
         }
       }
     },
-    "VoiceInk Pro": {
+    "VoiceInk CE reads visible screen content to improve the accuracy of transcripts.": {
       "localizations": {
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "VoiceInk Pro"
+            "value": "VoiceInk CE liest sichtbare Bildschirminhalte, um die Genauigkeit der Transkripte zu verbessern."
           }
         }
       }
     },
-    "VoiceInk reads visible screen content to improve the accuracy of transcripts.": {
+    "VoiceInk CE recorder dismissed": {
       "localizations": {
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "VoiceInk liest sichtbare Bildschirminhalte, um die Genauigkeit der Transkripte zu verbessern."
+            "value": "VoiceInk CE-Aufnahme geschlossen"
           }
         }
       }
     },
-    "VoiceInk recorder dismissed": {
+    "VoiceInk CE recorder toggled": {
       "localizations": {
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "VoiceInk-Aufnahme geschlossen"
+            "value": "VoiceInk CE-Aufnahme umgeschaltet"
           }
         }
       }
     },
-    "VoiceInk recorder toggled": {
+    "VoiceInk CE recording service is not available": {
       "localizations": {
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "VoiceInk-Aufnahme umgeschaltet"
+            "value": "VoiceInk CE-Aufnahmedienst ist nicht verfügbar"
           }
         }
       }
     },
-    "VoiceInk recording service is not available": {
+    "VoiceInk CE sessions completed": {
       "localizations": {
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "VoiceInk-Aufnahmedienst ist nicht verfügbar"
+            "value": "VoiceInk CE-Sitzungen abgeschlossen"
           }
         }
       }
     },
-    "VoiceInk sessions completed": {
+    "VoiceInk CE temporarily uses the clipboard to paste transcription. When enabled, it restores your previous clipboard content after the selected delay. When disabled, the pasted transcription stays on your clipboard.": {
       "localizations": {
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "VoiceInk-Sitzungen abgeschlossen"
+            "value": "VoiceInk CE nutzt die Zwischenablage vorübergehend zum Einfügen der Transkription. Wenn aktiviert, wird der frühere Inhalt der Zwischenablage nach der gewählten Verzögerung wiederhergestellt. Wenn deaktiviert, bleibt die Transkription in der Zwischenablage."
           }
         }
       }
     },
-    "VoiceInk temporarily uses the clipboard to paste transcription. When enabled, it restores your previous clipboard content after the selected delay. When disabled, the pasted transcription stays on your clipboard.": {
+    "VoiceInk CE uses Accessibility to type transcriptions directly into any app.": {
       "localizations": {
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "VoiceInk nutzt die Zwischenablage vorübergehend zum Einfügen der Transkription. Wenn aktiviert, wird der frühere Inhalt der Zwischenablage nach der gewählten Verzögerung wiederhergestellt. Wenn deaktiviert, bleibt die Transkription in der Zwischenablage."
+            "value": "VoiceInk CE verwendet Bedienungshilfen, um Transkriptionen direkt in jede App einzugeben."
           }
         }
       }
     },
-    "VoiceInk uses Accessibility to type transcriptions directly into any app.": {
+    "VoiceInk CE uses LLMs to enhance transcripts and perform AI actions. Set up an API key before continuing.": {
       "localizations": {
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "VoiceInk verwendet Bedienungshilfen, um Transkriptionen direkt in jede App einzugeben."
+            "value": "VoiceInk CE verwendet LLMs, um Transkripte zu verbessern und KI-Aktionen auszuführen. Richte einen API-Schlüssel ein, bevor du fortfährst."
           }
         }
       }
     },
-    "VoiceInk uses LLMs to enhance transcripts and perform AI actions. Set up an API key before continuing.": {
+    "VoiceInk CE uses your microphone to capture your voice.": {
       "localizations": {
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "VoiceInk verwendet LLMs, um Transkripte zu verbessern und KI-Aktionen auszuführen. Richte einen API-Schlüssel ein, bevor du fortfährst."
+            "value": "VoiceInk CE verwendet dein Mikrofon, um deine Stimme aufzunehmen."
           }
         }
       }
     },
-    "VoiceInk uses your microphone to capture your voice.": {
+    "VoiceInk CE vs. typing by hand": {
       "localizations": {
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "VoiceInk verwendet dein Mikrofon, um deine Stimme aufzunehmen."
+            "value": "VoiceInk CE vs. Tippen von Hand"
           }
         }
       }
     },
-    "VoiceInk vs. typing by hand": {
+    "VoiceInk CE will download NVIDIA's Parakeet model to set up fast local transcription.": {
       "localizations": {
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "VoiceInk vs. Tippen von Hand"
-          }
-        }
-      }
-    },
-    "VoiceInk will download NVIDIA's Parakeet model to set up fast local transcription.": {
-      "localizations": {
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "VoiceInk lädt das Parakeet-Modell von NVIDIA herunter, um schnelle lokale Transkription einzurichten."
+            "value": "VoiceInk CE lädt das Parakeet-Modell von NVIDIA herunter, um schnelle lokale Transkription einzurichten."
           }
         }
       }
@@ -10580,52 +10064,12 @@
         }
       }
     },
-    "You have %lld days left in your trial": {
-      "localizations": {
-        "de": {
-          "variations": {
-            "plural": {
-              "one": {
-                "stringUnit": {
-                  "state": "translated",
-                  "value": "Ihre Testphase läuft noch %lld Tag"
-                }
-              },
-              "other": {
-                "stringUnit": {
-                  "state": "translated",
-                  "value": "Ihre Testphase läuft noch %lld Tage"
-                }
-              }
-            }
-          }
-        },
-        "en": {
-          "variations": {
-            "plural": {
-              "one": {
-                "stringUnit": {
-                  "state": "translated",
-                  "value": "You have %lld day left in your trial"
-                }
-              },
-              "other": {
-                "stringUnit": {
-                  "state": "translated",
-                  "value": "You have %lld days left in your trial"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "You have saved %@ with VoiceInk": {
+    "You have saved %@ with VoiceInk CE": {
       "localizations": {
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "Du hast %@ mit VoiceInk gespart"
+            "value": "Du hast %@ mit VoiceInk CE gespart"
           }
         }
       }
@@ -10650,17 +10094,6 @@
         }
       }
     },
-    "Your license key is verified. VoiceInk is ready to use on this Mac.": {
-      "extractionState": "manual",
-      "localizations": {
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Ihr Lizenzschlüssel wurde verifiziert. VoiceInk ist auf diesem Mac einsatzbereit."
-          }
-        }
-      }
-    },
     "Your settings have been successfully exported to %@.": {
       "localizations": {
         "de": {
@@ -10681,26 +10114,6 @@
         }
       }
     },
-    "Your trial has ended. Upgrade to VoiceInk Pro at %@": {
-      "localizations": {
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Deine Testversion ist beendet. Upgrade auf VoiceInk Pro unter %@"
-          }
-        }
-      }
-    },
-    "Your trial has expired. Upgrade to continue using VoiceInk": {
-      "localizations": {
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Deine Testversion ist abgelaufen. Upgrade, um VoiceInk weiter zu verwenden."
-          }
-        }
-      }
-    },
     "Your usage summary will appear here.": {
       "localizations": {
         "de": {
@@ -10711,12 +10124,12 @@
         }
       }
     },
-    "Your VoiceInk journey starts with your first recording.": {
+    "Your VoiceInk CE journey starts with your first recording.": {
       "localizations": {
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "Deine VoiceInk-Reise beginnt mit der ersten Aufnahme."
+            "value": "Deine VoiceInk CE-Reise beginnt mit der ersten Aufnahme."
           }
         }
       }

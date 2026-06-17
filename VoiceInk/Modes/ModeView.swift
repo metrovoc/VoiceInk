@@ -97,8 +97,8 @@ struct ModeView: View {
             VStack(spacing: 0) {
                 AppScreenHeader(
                     title: "Modes",
-                    infoMessage: "Modes help you set up VoiceInk for different writing tasks, workflows, and scenarios.",
-                    infoURL: "https://tryvoiceink.com/docs/modes"
+                    infoMessage: "Modes help you set up VoiceInk CE for different writing tasks, workflows, and scenarios.",
+                    infoURL: AppLinks.documentation.absoluteString
                 ) {
                     headerControls
                 }
@@ -122,7 +122,7 @@ struct ModeView: View {
                                                         .font(.system(size: 20, weight: .medium))
                                                         .foregroundColor(.primary)
                                                     
-                                                    Text("Create first mode to automate your VoiceInk workflow based on apps/website you are using")
+                                                    Text("Create first mode to automate your VoiceInk CE workflow based on apps/website you are using")
                                                         .font(.system(size: 14))
                                                         .foregroundColor(.secondary)
                                                         .multilineTextAlignment(.center)

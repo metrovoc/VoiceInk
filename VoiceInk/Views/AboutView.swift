@@ -6,7 +6,13 @@ struct AboutView: View {
     var body: some View {
         ScrollView {
             VStack(spacing: 28) {
-                AppIconView()
+                ZStack(alignment: .bottomTrailing) {
+                    AppIconView()
+
+                    CEEditionMark()
+                        .offset(x: 34, y: 10)
+                }
+                .padding(.trailing, 34)
 
                 VStack(spacing: 10) {
                     HStack(alignment: .lastTextBaseline, spacing: 10) {
@@ -25,7 +31,7 @@ struct AboutView: View {
                 }
 
                 VStack(alignment: .leading, spacing: 16) {
-                    Label("A personal fork of VoiceInk", systemImage: "person.crop.circle")
+                    Label("A personal fork of VoiceInk CE", systemImage: "person.crop.circle")
                         .font(.headline)
 
                     Text("Maintained for local workflow needs, with focused reliability work and small experiments.")
@@ -70,5 +76,65 @@ struct AboutView: View {
             .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
         }
         .buttonStyle(.plain)
+    }
+}
+
+private struct CEEditionMark: View {
+    var body: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .fill(
+                    LinearGradient(
+                        colors: [
+                            Color.blue.opacity(0.16),
+                            Color.teal.opacity(0.18)
+                        ],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
+                )
+                .frame(width: 92, height: 62)
+                .rotationEffect(.degrees(-9))
+                .shadow(color: .black.opacity(0.08), radius: 10, x: 0, y: 6)
+
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .fill(Color(NSColor.windowBackgroundColor))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                        .stroke(
+                            LinearGradient(
+                                colors: [
+                                    Color.blue.opacity(0.44),
+                                    Color.teal.opacity(0.44)
+                                ],
+                                startPoint: .topLeading,
+                                endPoint: .bottomTrailing
+                            ),
+                            lineWidth: 1.4
+                        )
+                )
+                .frame(width: 92, height: 62)
+                .rotationEffect(.degrees(8))
+                .overlay(
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("CE")
+                            .font(.caption)
+                            .fontWeight(.semibold)
+                            .foregroundStyle(.primary)
+
+                        Capsule()
+                            .fill(Color.teal.opacity(0.32))
+                            .frame(width: 42, height: 5)
+
+                        Capsule()
+                            .fill(Color.blue.opacity(0.24))
+                            .frame(width: 64, height: 5)
+                    }
+                    .padding(10)
+                    .rotationEffect(.degrees(8))
+                )
+        }
+        .frame(width: 120, height: 86)
+        .accessibilityLabel("VoiceInk CE edition")
     }
 }

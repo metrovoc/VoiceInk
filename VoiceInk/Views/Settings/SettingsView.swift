@@ -145,7 +145,7 @@ struct SettingsView: View {
                     isExpanded: $isRestoreClipboardExpanded,
                     isEnabled: $restoreClipboardAfterPaste,
                     label: "Keep Clipboard Content",
-                    infoMessage: "VoiceInk temporarily uses the clipboard to paste transcription. When enabled, it restores your previous clipboard content after the selected delay. When disabled, the pasted transcription stays on your clipboard."
+                    infoMessage: "VoiceInk CE temporarily uses the clipboard to paste transcription. When enabled, it restores your previous clipboard content after the selected delay. When disabled, the pasted transcription stays on your clipboard."
                 ) {
                     Picker("Restore Delay", selection: $clipboardRestoreDelay) {
                         Text("250ms").tag(0.25)
@@ -224,7 +224,7 @@ struct SettingsView: View {
             } header: {
                 Text("Privacy")
             } footer: {
-                Text("Control how VoiceInk handles your transcription data and audio recordings.")
+                Text("Control how VoiceInk CE handles your transcription data and audio recordings.")
             }
 
             Section {

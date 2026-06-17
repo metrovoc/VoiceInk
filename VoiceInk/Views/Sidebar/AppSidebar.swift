@@ -79,7 +79,7 @@ private extension ViewType {
 
     static let secondaryItems: [ViewType] = [
         .settings,
-        .license
+        .about
     ]
 
     static func assertSidebarItemsCoverAllCases() {
@@ -100,7 +100,7 @@ private extension ViewType {
         case .textRules: return "doc.text.magnifyingglass"
         case .dictionary: return "text.book.closed.fill"
         case .settings: return "gearshape.fill"
-        case .license: return "checkmark.seal.fill"
+        case .about: return "info.circle.fill"
         }
     }
 
@@ -124,8 +124,8 @@ private extension ViewType {
             return .init(background: AppTheme.Sidebar.transcribeAudio)
         case .settings:
             return .init(background: AppTheme.Sidebar.fallback)
-        case .license:
-            return .init(background: AppTheme.Sidebar.license)
+        case .about:
+            return .init(background: AppTheme.Sidebar.fallback)
         }
     }
 }

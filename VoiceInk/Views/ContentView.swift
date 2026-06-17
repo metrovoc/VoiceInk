@@ -11,7 +11,7 @@ enum ViewType: String, CaseIterable, Identifiable {
     case textRules = "Text Transform"
     case dictionary = "Dictionary"
     case settings = "Settings"
-    case license = "VoiceInk Pro"
+    case about = "About"
 
     var id: String { rawValue }
 }
@@ -85,8 +85,8 @@ struct ContentView: View {
             ModeView()
         case .settings:
             SettingsView()
-        case .license:
-            LicenseManagementView()
+        case .about:
+            AboutView()
         }
     }
 }

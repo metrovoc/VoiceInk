@@ -85,8 +85,6 @@ private enum DashboardStatsLoader {
 struct DashboardContent: View {
     private let logger = Logger(subsystem: AppIdentity.loggerSubsystem, category: "DashboardContent")
     let modelContext: ModelContext
-    let licenseState: LicenseViewModel.LicenseState
-    let onAddLicenseKey: () -> Void
 
     @State private var totalCount: Int = 0
     @State private var totalWords: Int = 0
@@ -97,14 +95,8 @@ struct DashboardContent: View {
     @State private var isAccessibilityEnabled = AXIsProcessTrusted()
     @State private var isSystemInfoCopied = false
 
-    init(
-        modelContext: ModelContext,
-        licenseState: LicenseViewModel.LicenseState,
-        onAddLicenseKey: @escaping () -> Void
-    ) {
+    init(modelContext: ModelContext) {
         self.modelContext = modelContext
-        self.licenseState = licenseState
-        self.onAddLicenseKey = onAddLicenseKey
 
         let cachedSummary = DashboardStatsCache.shared.currentSummary()
         _totalCount = State(initialValue: cachedSummary?.totalCount ?? 0)
@@ -129,8 +121,6 @@ struct DashboardContent: View {
                 GeometryReader { geometry in
                     ScrollView {
                         VStack(spacing: 24) {
-                            licenseStatusMessage
-
                             heroSection
 
                             if !isAccessibilityEnabled {
@@ -139,10 +129,7 @@ struct DashboardContent: View {
 
                             voiceInkStatsSection
 
-                            HStack(alignment: .top, spacing: 18) {
-                                HelpAndResourcesSection()
-                                DashboardPromotionsSection(licenseState: licenseState)
-                            }
+                            HelpAndResourcesSection()
 
                             Spacer(minLength: 20)
 
@@ -229,8 +216,6 @@ struct DashboardContent: View {
         GeometryReader { geometry in
             ScrollView {
                 VStack(spacing: 24) {
-                    licenseStatusMessage
-
                     VStack(spacing: 20) {
                         Image(systemName: "waveform")
                             .font(.system(size: 56, weight: .semibold))
@@ -255,32 +240,6 @@ struct DashboardContent: View {
     
     // MARK: - Sections
 
-    @ViewBuilder
-    private var licenseStatusMessage: some View {
-        switch licenseState {
-        case .unlicensed:
-            TrialMessageView(
-                message: Text("Activate a license to continue using VoiceInk."),
-                type: .licenseRequired,
-                onAddLicenseKey: onAddLicenseKey
-            )
-        case .trial(let daysRemaining):
-            TrialMessageView(
-                message: Text(String(localized: "You have \(daysRemaining) days left in your trial")),
-                type: daysRemaining <= 2 ? .warning : .info,
-                onAddLicenseKey: onAddLicenseKey
-            )
-        case .trialExpired:
-            TrialMessageView(
-                message: Text("Your trial has expired. Upgrade to continue using VoiceInk"),
-                type: .expired,
-                onAddLicenseKey: onAddLicenseKey
-            )
-        case .licensed:
-            EmptyView()
-        }
-    }
-    
     private var heroSection: some View {
         VStack(spacing: 10) {
             HStack {
@@ -292,13 +251,13 @@ struct DashboardContent: View {
                         .font(.system(size: 36, design: .rounded))
                         .foregroundColor(.white)
 
-                    Text("You have saved \(highlightedTime) with VoiceInk")
+                    Text("You have saved \(highlightedTime) with VoiceInk CE")
                         .fontWeight(.bold)
                         .foregroundColor(.white.opacity(0.85))
                         .font(.system(size: 30))
                         .multilineTextAlignment(.center)
                 } else {
-                    Text("VoiceInk Insights")
+                    Text("VoiceInk CE Insights")
                         .font(.system(size: 32, weight: .black, design: .rounded))
                         .foregroundStyle(.white)
                         .multilineTextAlignment(.center)
@@ -335,7 +294,7 @@ struct DashboardContent: View {
                 icon: "mic.fill",
                 title: "Sessions Recorded",
                 value: hasLoadedStatsSnapshot ? "\(totalCount)" : "–",
-                detail: "VoiceInk sessions completed",
+                detail: "VoiceInk CE sessions completed",
                 color: AppTheme.Sidebar.audio
             )
 
@@ -353,7 +312,7 @@ struct DashboardContent: View {
                 value: hasLoadedStatsSnapshot && averageWordsPerMinute > 0
                     ? String(format: "%.1f", averageWordsPerMinute)
                     : "–",
-                detail: "VoiceInk vs. typing by hand",
+                detail: "VoiceInk CE vs. typing by hand",
                 color: AppTheme.Sidebar.dashboard
             )
             
@@ -380,7 +339,7 @@ struct DashboardContent: View {
                 footerActionLabel(
                     icon: isSystemInfoCopied ? "checkmark" : "doc.on.doc",
                     title: isSystemInfoCopied ? "Copied!" : "Copy System Info",
-                    color: isSystemInfoCopied ? AppTheme.Sidebar.license : AppTheme.Sidebar.fallback
+                    color: isSystemInfoCopied ? AppTheme.Status.positive : AppTheme.Sidebar.fallback
                 )
             }
             .buttonStyle(.plain)
@@ -429,7 +388,7 @@ struct DashboardContent: View {
         }
 
         guard totalCount > 0 else {
-            return String(localized: "Your VoiceInk journey starts with your first recording.")
+            return String(localized: "Your VoiceInk CE journey starts with your first recording.")
         }
 
         let wordsText = Formatters.formattedNumber(totalWords)
@@ -493,7 +452,7 @@ private struct DashboardAccessibilityReminder: View {
                     .foregroundStyle(.primary)
                     .lineLimit(1)
 
-                Text("Required for VoiceInk shortcuts and app-wide controls to work properly.")
+                Text("Required for VoiceInk CE shortcuts and app-wide controls to work properly.")
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
                     .lineLimit(2)
