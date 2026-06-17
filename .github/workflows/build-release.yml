@@ -162,6 +162,7 @@ jobs:
         with:
           files: VoiceInk-CE.dmg
           tag_name: v${{ env.VERSION }}
+          target_commitish: ${{ github.sha }}
           generate_release_notes: true
 
       - name: Deploy appcast to GitHub Pages
