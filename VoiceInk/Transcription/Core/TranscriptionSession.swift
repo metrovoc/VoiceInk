@@ -48,7 +48,7 @@ final class FileTranscriptionSession: TranscriptionSession {
 /// Streaming session with automatic fallback to file-based upload on failure.
 @MainActor
 final class StreamingTranscriptionSession: TranscriptionSession {
-    private let streamingService: StreamingTranscriptionService
+    private let streamingService: any StreamingTranscriptionServicing
     private let fallbackService: TranscriptionService
     // Batch-compatible override for streaming-only models rejected by the provider's REST API.
     private let fallbackModel: (any TranscriptionModel)?
@@ -56,7 +56,7 @@ final class StreamingTranscriptionSession: TranscriptionSession {
     private var streamingFailed = false
     private let logger = Logger(subsystem: AppIdentity.loggerSubsystem, category: "StreamingTranscriptionSession")
 
-    init(streamingService: StreamingTranscriptionService, fallbackService: TranscriptionService, fallbackModel: (any TranscriptionModel)? = nil) {
+    init(streamingService: any StreamingTranscriptionServicing, fallbackService: TranscriptionService, fallbackModel: (any TranscriptionModel)? = nil) {
         self.streamingService = streamingService
         self.fallbackService = fallbackService
         self.fallbackModel = fallbackModel
@@ -67,8 +67,8 @@ final class StreamingTranscriptionSession: TranscriptionSession {
 
         // Return callback immediately; WebSocket connects in background
         let service = streamingService
-        let callback: (Data) -> Void = { [weak service] data in
-            service?.sendAudioChunk(data)
+        let callback: (Data) -> Void = { data in
+            service.sendAudioChunk(data)
         }
 
         Task.detached { [weak self] in

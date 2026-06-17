@@ -37,9 +37,26 @@ enum StreamingState {
     case cancelled
 }
 
+protocol StreamingTranscriptionServicing: AnyObject {
+    @MainActor
+    var isActive: Bool { get }
+
+    @MainActor
+    func startStreaming(model: any TranscriptionModel) async throws
+
+    nonisolated func sendAudioChunk(_ data: Data)
+
+    @MainActor
+    func stopAndGetFinalText() async throws -> String
+
+    @MainActor
+    func cancel()
+}
+
 /// Manages a streaming transcription lifecycle: buffers audio chunks, sends them to the provider, and collects the final text.
 @MainActor
-class StreamingTranscriptionService {
+class StreamingTranscriptionService: StreamingTranscriptionServicing {
+    typealias ProviderFactory = (any TranscriptionModel, ModelContext, ParakeetTranscriptionService?) -> StreamingTranscriptionProvider
 
     private let logger = Logger(subsystem: AppIdentity.loggerSubsystem, category: "StreamingTranscriptionService")
     private var provider: StreamingTranscriptionProvider?
@@ -52,11 +69,24 @@ class StreamingTranscriptionService {
     private var committedSegments: [String] = []
     private let modelContext: ModelContext
     private let parakeetService: ParakeetTranscriptionService?
+    private let providerFactory: ProviderFactory
+    private let drainTimeoutNanoseconds: UInt64
+    private let finalCommitTimeoutNanoseconds: UInt64
     private var onPartialTranscript: ((String) -> Void)?
 
-    init(modelContext: ModelContext, parakeetService: ParakeetTranscriptionService? = nil, onPartialTranscript: ((String) -> Void)? = nil) {
+    init(
+        modelContext: ModelContext,
+        parakeetService: ParakeetTranscriptionService? = nil,
+        onPartialTranscript: ((String) -> Void)? = nil,
+        providerFactory: ProviderFactory? = nil,
+        drainTimeoutNanoseconds: UInt64 = 3_000_000_000,
+        finalCommitTimeoutNanoseconds: UInt64 = 10_000_000_000
+    ) {
         self.modelContext = modelContext
         self.parakeetService = parakeetService
+        self.providerFactory = providerFactory ?? Self.defaultProviderFactory
+        self.drainTimeoutNanoseconds = drainTimeoutNanoseconds
+        self.finalCommitTimeoutNanoseconds = finalCommitTimeoutNanoseconds
         self.onPartialTranscript = onPartialTranscript
     }
 
@@ -80,7 +110,7 @@ class StreamingTranscriptionService {
         state = .connecting
         committedSegments = []
 
-        let provider = createProvider(for: model)
+        let provider = providerFactory(model, modelContext, parakeetService)
         self.provider = provider
 
         let selectedLanguage = UserDefaults.standard.string(forKey: "SelectedLanguage") ?? "auto"
@@ -185,7 +215,11 @@ class StreamingTranscriptionService {
 
     // MARK: - Private
 
-    private func createProvider(for model: any TranscriptionModel) -> StreamingTranscriptionProvider {
+    private static func defaultProviderFactory(
+        model: any TranscriptionModel,
+        modelContext: ModelContext,
+        parakeetService: ParakeetTranscriptionService?
+    ) -> StreamingTranscriptionProvider {
         switch model.provider {
         case .elevenLabs:
             return ElevenLabsStreamingProvider()
@@ -240,6 +274,7 @@ class StreamingTranscriptionService {
             throw StreamingTranscriptionError.timeout
         }
 
+        let timeoutNanoseconds = drainTimeoutNanoseconds
         let drained = await withTaskGroup(of: Bool.self) { group in
             group.addTask {
                 for await _ in finishedStream {
@@ -249,7 +284,7 @@ class StreamingTranscriptionService {
             }
 
             group.addTask {
-                try? await Task.sleep(nanoseconds: 3_000_000_000)
+                try? await Task.sleep(nanoseconds: timeoutNanoseconds)
                 return false
             }
 
@@ -311,6 +346,7 @@ class StreamingTranscriptionService {
     /// Waits for the server to acknowledge our explicit commit, with a 10-second timeout.
     private func waitForFinalCommit(signalStream: AsyncStream<Void>) async throws -> String {
         // Race: wait for commit acknowledgment vs timeout
+        let timeoutNanoseconds = finalCommitTimeoutNanoseconds
         let receivedInTime = await withTaskGroup(of: Bool.self) { group in
             group.addTask { @MainActor in
                 for await _ in signalStream {
@@ -320,7 +356,7 @@ class StreamingTranscriptionService {
             }
 
             group.addTask {
-                try? await Task.sleep(nanoseconds: 10_000_000_000) // 10 seconds
+                try? await Task.sleep(nanoseconds: timeoutNanoseconds)
                 return false
             }
 

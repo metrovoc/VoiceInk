@@ -87,23 +87,19 @@ class RecorderUIManager: ObservableObject {
         guard let engine = engine else { return }
         logger.notice("toggleMiniRecorder called – visible=\(self.isMiniRecorderVisible, privacy: .public), state=\(String(describing: engine.recordingState), privacy: .public)")
 
-        if isMiniRecorderVisible {
-            switch engine.recordingState {
-            case .recording:
-                logger.notice("toggleMiniRecorder: stopping recording (was recording)")
-                await engine.toggleRecord(powerModeId: powerModeId)
-            case .starting:
-                logger.notice("toggleMiniRecorder: ignoring toggle while recording startup is in progress")
-            case .idle:
-                logger.notice("toggleMiniRecorder: cancelling (was not recording)")
-                await cancelRecording()
-            case .transcribing, .enhancing, .busy:
-                logger.notice("toggleMiniRecorder: ignoring toggle while state is \(String(describing: engine.recordingState), privacy: .public)")
-            }
-        } else {
+        switch RecordingInteractionPolicy.toggleAction(isRecorderVisible: isMiniRecorderVisible, state: engine.recordingState) {
+        case .start:
             SoundManager.shared.playStartSound()
             await MainActor.run { isMiniRecorderVisible = true }
             await engine.toggleRecord(powerModeId: powerModeId)
+        case .stopRecording:
+            logger.notice("toggleMiniRecorder: stopping recording")
+            await engine.toggleRecord(powerModeId: powerModeId)
+        case .cancelIdleRecorder:
+            logger.notice("toggleMiniRecorder: cancelling idle visible recorder")
+            await cancelRecording()
+        case .ignore:
+            logger.notice("toggleMiniRecorder: ignoring toggle while state is \(String(describing: engine.recordingState), privacy: .public)")
         }
     }
 
