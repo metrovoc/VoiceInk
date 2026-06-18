@@ -143,8 +143,11 @@ final class OnboardingPermissionController {
             return
         }
 
-        AVCaptureDevice.requestAccess(for: .audio) { [weak self] _ in
+        AVCaptureDevice.requestAccess(for: .audio) { [weak self] granted in
             DispatchQueue.main.async {
+                if granted {
+                    NotificationCenter.default.post(name: .microphonePermissionDidChange, object: nil)
+                }
                 self?.refreshPermissionStatuses()
                 self?.startPollingPermissionStatus()
             }

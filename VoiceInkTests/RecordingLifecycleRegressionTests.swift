@@ -6,9 +6,10 @@ import Testing
 struct RecordingLifecycleRegressionTests {
     @Test func recordingShortcutPolicyRejectsOnlyNonInteractiveStates() {
         #expect(RecordingInteractionPolicy.canProcessRecordingShortcut(when: .idle))
+        #expect(RecordingInteractionPolicy.canProcessRecordingShortcut(when: .starting))
         #expect(RecordingInteractionPolicy.canProcessRecordingShortcut(when: .recording))
 
-        for state in [RecordingState.starting, .transcribing, .enhancing, .busy] {
+        for state in [RecordingState.transcribing, .enhancing, .busy] {
             #expect(!RecordingInteractionPolicy.canProcessRecordingShortcut(when: state))
         }
     }
@@ -25,13 +26,44 @@ struct RecordingLifecycleRegressionTests {
             ) == .startAssistantFollowUp
         )
 
-        #expect(RecordingInteractionPolicy.toggleAction(isRecorderVisible: false, state: .starting) == .ignore)
-        #expect(RecordingInteractionPolicy.toggleAction(isRecorderVisible: true, state: .starting) == .ignore)
+        #expect(RecordingInteractionPolicy.toggleAction(isRecorderVisible: false, state: .starting) == .stopRecording)
+        #expect(RecordingInteractionPolicy.toggleAction(isRecorderVisible: true, state: .starting) == .stopRecording)
 
         for state in [RecordingState.transcribing, .enhancing, .busy] {
             #expect(RecordingInteractionPolicy.toggleAction(isRecorderVisible: false, state: state) == .ignore)
             #expect(RecordingInteractionPolicy.toggleAction(isRecorderVisible: true, state: state) == .ignore)
         }
+    }
+
+    @Test func recorderTogglePolicyDismissesOnlyPreCaptureStartupCancellation() {
+        #expect(
+            RecordingInteractionPolicy.shouldDismissPanelAfterStop(
+                previousState: .starting,
+                currentState: .idle,
+                isRecorderVisible: true
+            )
+        )
+        #expect(
+            !RecordingInteractionPolicy.shouldDismissPanelAfterStop(
+                previousState: .starting,
+                currentState: .starting,
+                isRecorderVisible: true
+            )
+        )
+        #expect(
+            !RecordingInteractionPolicy.shouldDismissPanelAfterStop(
+                previousState: .recording,
+                currentState: .idle,
+                isRecorderVisible: true
+            )
+        )
+        #expect(
+            !RecordingInteractionPolicy.shouldDismissPanelAfterStop(
+                previousState: .starting,
+                currentState: .idle,
+                isRecorderVisible: false
+            )
+        )
     }
 
     @MainActor
@@ -60,6 +92,98 @@ struct RecordingLifecycleRegressionTests {
         #expect(provider.sentChunkCountAtCommit == chunks.count)
         #expect(provider.commitCallCount == 1)
         #expect(provider.disconnectCallCount == 1)
+    }
+
+    @MainActor
+    @Test func streamingServiceReturnsFinalTextWhenDisconnectTimesOut() async throws {
+        let provider = FakeStreamingProvider(
+            commitEvent: .committed(text: "final text"),
+            disconnectDelayNanoseconds: 200_000_000
+        )
+        let service = try StreamingTranscriptionService(
+            modelContext: makeModelContext(),
+            providerFactory: { _, _, _ in provider },
+            finalCommitTimeoutNanoseconds: 200_000_000,
+            disconnectTimeoutNanoseconds: 20_000_000
+        )
+
+        try await service.startStreaming(
+            model: makeCloudModel(name: "deepgram-live", provider: .deepgram),
+            context: TranscriptionRequestContext(language: "en", prompt: nil)
+        )
+
+        let startedAt = Date()
+        let text = try await service.stopAndGetFinalText()
+        let elapsed = Date().timeIntervalSince(startedAt)
+
+        #expect(text == "final text")
+        #expect(elapsed < 0.15)
+        #expect(provider.commitCallCount == 1)
+        #expect(provider.disconnectCallCount == 1)
+    }
+
+    @MainActor
+    @Test func streamingServiceSendsAudioBufferedBeforeConnection() async throws {
+        let provider = FakeStreamingProvider(commitEvent: .committed(text: "final text"))
+        let service = try StreamingTranscriptionService(
+            modelContext: makeModelContext(),
+            providerFactory: { _, _, _ in provider },
+            finalCommitTimeoutNanoseconds: 200_000_000
+        )
+
+        let earlyChunk = Data([0x7A, 0x7B])
+        service.sendAudioChunk(earlyChunk)
+
+        try await service.startStreaming(
+            model: makeCloudModel(name: "deepgram-live", provider: .deepgram),
+            context: TranscriptionRequestContext(language: "en", prompt: nil)
+        )
+
+        let text = try await service.stopAndGetFinalText()
+
+        #expect(text == "final text")
+        #expect(provider.sentChunks == [earlyChunk])
+        #expect(provider.sentChunkCountAtCommit == 1)
+    }
+
+    @MainActor
+    @Test func streamingSessionFallsBackWhenBufferedAudioDropsBeforeConnection() async throws {
+        let provider = FakeStreamingProvider(
+            commitEvent: .committed(text: "streaming transcript"),
+            connectDelayNanoseconds: 20_000_000
+        )
+        let streamingService = try StreamingTranscriptionService(
+            modelContext: makeModelContext(),
+            providerFactory: { _, _, _ in provider },
+            maxBufferedChunks: 1,
+            finalCommitTimeoutNanoseconds: 200_000_000
+        )
+        let fallbackService = FakeBatchTranscriptionService(result: "batch transcript")
+        let streamingModel = makeCloudModel(name: "deepgram-live", provider: .deepgram)
+        let session = StreamingTranscriptionSession(
+            streamingService: streamingService,
+            fallbackService: fallbackService
+        )
+
+        let preparedCallback = try await session.prepare(
+            configuration: TranscriptionRuntimeConfiguration(
+                mode: nil,
+                model: streamingModel,
+                language: "en",
+                isRealtimeEnabled: true
+            )
+        )
+        let callback = try #require(preparedCallback)
+        callback(Data([0x01]))
+        callback(Data([0x02]))
+
+        let text = try await session.transcribe(audioURL: URL(fileURLWithPath: "/tmp/voiceink-test.wav"))
+
+        #expect(text == "batch transcript")
+        #expect(provider.sentChunks == [Data([0x02])])
+        #expect(provider.commitCallCount == 0)
+        #expect(provider.disconnectCallCount == 1)
+        #expect(fallbackService.transcribeCallCount == 1)
     }
 
     @MainActor
@@ -115,7 +239,7 @@ struct RecordingLifecycleRegressionTests {
     }
 
     @MainActor
-    @Test func streamingSessionWaitsForStreamingStartBeforeReturningAudioCallback() async throws {
+    @Test func streamingSessionReturnsAudioCallbackBeforeStreamingStart() async throws {
         let streamingService = DelayedStartStreamingService()
         let fallbackService = FakeBatchTranscriptionService(result: "batch transcript")
         let streamingModel = makeCloudModel(name: "deepgram-live", provider: .deepgram)
@@ -135,17 +259,49 @@ struct RecordingLifecycleRegressionTests {
             )
         }
 
-        try await Task.sleep(nanoseconds: 20_000_000)
-        #expect(streamingService.startCallCount == 1)
-        #expect(streamingService.sentChunks.isEmpty)
-
-        streamingService.releaseStart()
         let preparedCallback = try await prepareTask.value
         let callback = try #require(preparedCallback)
         let chunk = Data([0x2A])
         callback(chunk)
 
+        try await Task.sleep(nanoseconds: 20_000_000)
+        #expect(streamingService.startCallCount == 1)
         #expect(streamingService.sentChunks == [chunk])
+
+        streamingService.releaseStart()
+        let text = try await session.transcribe(audioURL: URL(fileURLWithPath: "/tmp/voiceink-test.wav"))
+
+        #expect(text == "streaming transcript")
+    }
+
+    @MainActor
+    @Test func streamingSessionFallsBackAndCancelsWhenStreamingStartTimesOut() async throws {
+        let streamingService = DelayedStartStreamingService()
+        let fallbackService = FakeBatchTranscriptionService(result: "batch transcript")
+        let streamingModel = makeCloudModel(name: "deepgram-live", provider: .deepgram)
+        let session = StreamingTranscriptionSession(
+            streamingService: streamingService,
+            fallbackService: fallbackService,
+            streamingStartTimeoutNanoseconds: 20_000_000
+        )
+
+        let preparedCallback = try await session.prepare(
+            configuration: TranscriptionRuntimeConfiguration(
+                mode: nil,
+                model: streamingModel,
+                language: "en",
+                isRealtimeEnabled: true
+            )
+        )
+        let callback = try #require(preparedCallback)
+        callback(Data([0x01]))
+
+        let text = try await session.transcribe(audioURL: URL(fileURLWithPath: "/tmp/voiceink-test.wav"))
+
+        #expect(text == "batch transcript")
+        #expect(streamingService.cancelCallCount >= 1)
+        #expect(streamingService.stopCallCount == 0)
+        #expect(fallbackService.transcribeCallCount == 1)
     }
 
     @MainActor
@@ -301,20 +457,36 @@ private final class FakeStreamingProvider: StreamingTranscriptionProvider, @unch
     private var _disconnectCallCount = 0
     private let commitEvents: [StreamingTranscriptionEvent]
     private let sendError: Error?
+    private let connectDelayNanoseconds: UInt64
+    private let disconnectDelayNanoseconds: UInt64
     private let eventContinuation: AsyncStream<StreamingTranscriptionEvent>.Continuation
     let transcriptionEvents: AsyncStream<StreamingTranscriptionEvent>
 
-    init(commitEvent: StreamingTranscriptionEvent?, sendError: Error? = nil) {
+    init(
+        commitEvent: StreamingTranscriptionEvent?,
+        sendError: Error? = nil,
+        connectDelayNanoseconds: UInt64 = 0,
+        disconnectDelayNanoseconds: UInt64 = 0
+    ) {
         self.commitEvents = commitEvent.map { [$0] } ?? []
         self.sendError = sendError
+        self.connectDelayNanoseconds = connectDelayNanoseconds
+        self.disconnectDelayNanoseconds = disconnectDelayNanoseconds
         let (stream, continuation) = AsyncStream.makeStream(of: StreamingTranscriptionEvent.self)
         self.transcriptionEvents = stream
         self.eventContinuation = continuation
     }
 
-    init(commitEvents: [StreamingTranscriptionEvent], sendError: Error? = nil) {
+    init(
+        commitEvents: [StreamingTranscriptionEvent],
+        sendError: Error? = nil,
+        connectDelayNanoseconds: UInt64 = 0,
+        disconnectDelayNanoseconds: UInt64 = 0
+    ) {
         self.commitEvents = commitEvents
         self.sendError = sendError
+        self.connectDelayNanoseconds = connectDelayNanoseconds
+        self.disconnectDelayNanoseconds = disconnectDelayNanoseconds
         let (stream, continuation) = AsyncStream.makeStream(of: StreamingTranscriptionEvent.self)
         self.transcriptionEvents = stream
         self.eventContinuation = continuation
@@ -337,6 +509,9 @@ private final class FakeStreamingProvider: StreamingTranscriptionProvider, @unch
     }
 
     func connect(model: any TranscriptionModel, language: String?) async throws {
+        if connectDelayNanoseconds > 0 {
+            try await Task.sleep(nanoseconds: connectDelayNanoseconds)
+        }
         eventContinuation.yield(.sessionStarted)
     }
 
@@ -363,6 +538,9 @@ private final class FakeStreamingProvider: StreamingTranscriptionProvider, @unch
 
     func disconnect() async {
         withLock { _disconnectCallCount += 1 }
+        if disconnectDelayNanoseconds > 0 {
+            try? await Task.sleep(nanoseconds: disconnectDelayNanoseconds)
+        }
         eventContinuation.finish()
     }
 
@@ -378,9 +556,19 @@ private final class DelayedStartStreamingService: StreamingTranscriptionServicin
     private var startContinuation: CheckedContinuation<Void, Never>?
     private var _sentChunks: [Data] = []
     private var _startCallCount = 0
+    private var _stopCallCount = 0
+    private var _cancelCallCount = 0
 
     var startCallCount: Int {
         withLock { _startCallCount }
+    }
+
+    var stopCallCount: Int {
+        withLock { _stopCallCount }
+    }
+
+    var cancelCallCount: Int {
+        withLock { _cancelCallCount }
     }
 
     var sentChunks: [Data] {
@@ -404,11 +592,13 @@ private final class DelayedStartStreamingService: StreamingTranscriptionServicin
 
     @MainActor
     func stopAndGetFinalText() async throws -> String {
-        "streaming transcript"
+        withLock { _stopCallCount += 1 }
+        return "streaming transcript"
     }
 
     @MainActor
     func cancel() {
+        withLock { _cancelCallCount += 1 }
         releaseStart()
     }
 

@@ -11,9 +11,9 @@ enum RecorderToggleAction: Equatable {
 enum RecordingInteractionPolicy {
     static func canProcessRecordingShortcut(when state: RecordingState) -> Bool {
         switch state {
-        case .idle, .recording:
+        case .idle, .starting, .recording:
             return true
-        case .starting, .transcribing, .enhancing, .busy:
+        case .transcribing, .enhancing, .busy:
             return false
         }
     }
@@ -25,11 +25,11 @@ enum RecordingInteractionPolicy {
     ) -> RecorderToggleAction {
         if isRecorderVisible {
             switch state {
-            case .recording:
+            case .starting, .recording:
                 return .stopRecording
             case .idle:
                 return canSendAssistantFollowUp ? .startAssistantFollowUp : .cancelIdleRecorder
-            case .starting, .transcribing, .enhancing, .busy:
+            case .transcribing, .enhancing, .busy:
                 return .ignore
             }
         }
@@ -37,10 +37,18 @@ enum RecordingInteractionPolicy {
         switch state {
         case .idle:
             return .start
-        case .recording:
+        case .starting, .recording:
             return .stopRecording
-        case .starting, .transcribing, .enhancing, .busy:
+        case .transcribing, .enhancing, .busy:
             return .ignore
         }
+    }
+
+    static func shouldDismissPanelAfterStop(
+        previousState: RecordingState,
+        currentState: RecordingState,
+        isRecorderVisible: Bool
+    ) -> Bool {
+        isRecorderVisible && previousState == .starting && currentState == .idle
     }
 }

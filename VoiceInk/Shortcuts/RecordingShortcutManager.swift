@@ -448,7 +448,7 @@ final class RecordingShortcutModeHandler {
 
         case .hybrid:
             let pressDuration = shortcutPressStartTime.map { eventTime - $0 } ?? 0
-            if pressDuration >= hybridPressThreshold && recordingState() == .recording {
+            if pressDuration >= hybridPressThreshold && [.starting, .recording].contains(recordingState()) {
                 guard canHandleShortcutAction() else { return }
                 await toggleRecorderPanel(modeId)
             } else {
