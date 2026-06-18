@@ -24,6 +24,10 @@ final class ShortcutMonitor {
     private var onShortcutInterrupted: ((ShortcutAction, TimeInterval) -> Void)?
     private var eventTap: CFMachPort?
     private var eventTapRunLoopSource: CFRunLoopSource?
+    private var eventTapRunLoop: CFRunLoop?
+    private var eventTapThread: Thread?
+    private let stateLock = NSRecursiveLock()
+    private var generation = 0
     private let logger = Logger(subsystem: "com.metrovoc.voiceink", category: "ShortcutMonitor")
 
     private static let shortcutInterruptionWindow: TimeInterval = 1.0
@@ -42,11 +46,14 @@ final class ShortcutMonitor {
     ) -> Bool {
         stop()
 
+        stateLock.lock()
+        generation += 1
         for (action, shortcut) in shortcuts {
             self.shortcuts[action] = ShortcutState(shortcut: shortcut)
         }
 
         guard !self.shortcuts.isEmpty else {
+            stateLock.unlock()
             return true
         }
 
@@ -54,26 +61,37 @@ final class ShortcutMonitor {
         self.onKeyDown = onKeyDown
         self.onKeyUp = onKeyUp
         self.onShortcutInterrupted = onShortcutInterrupted
+        stateLock.unlock()
 
         return installEventTap()
     }
 
     func stop() {
-        if let eventTapRunLoopSource {
-            CFRunLoopRemoveSource(CFRunLoopGetMain(), eventTapRunLoopSource, .commonModes)
-            self.eventTapRunLoopSource = nil
-        }
-
-        if let eventTap {
-            CFMachPortInvalidate(eventTap)
-            self.eventTap = nil
-        }
-
+        stateLock.lock()
+        generation += 1
         shortcuts = [:]
         interruptibleActions = []
         onKeyDown = nil
         onKeyUp = nil
         onShortcutInterrupted = nil
+        stateLock.unlock()
+
+        let runLoopToStop = eventTapRunLoop
+        if let eventTap {
+            CFMachPortInvalidate(eventTap)
+            self.eventTap = nil
+        }
+
+        if let runLoopToStop {
+            CFRunLoopStop(runLoopToStop)
+        }
+
+        if let eventTapRunLoopSource {
+            self.eventTapRunLoopSource = nil
+        }
+
+        eventTapRunLoop = nil
+        eventTapThread = nil
     }
 
     private func installEventTap() -> Bool {
@@ -85,6 +103,8 @@ final class ShortcutMonitor {
             let monitor = Unmanaged<ShortcutMonitor>.fromOpaque(userInfo).takeUnretainedValue()
 
             if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
+                let reason = type == .tapDisabledByTimeout ? "timeout" : "userInput"
+                monitor.logger.warning("Global shortcut event tap disabled reason=\(reason, privacy: .public); resetting shortcut state")
                 monitor.resetPressedShortcutsAfterTapInterruption()
                 if let eventTap = monitor.eventTap {
                     CGEvent.tapEnable(tap: eventTap, enable: true)
@@ -116,8 +136,45 @@ final class ShortcutMonitor {
 
         self.eventTap = eventTap
         eventTapRunLoopSource = source
-        CFRunLoopAddSource(CFRunLoopGetMain(), source, .commonModes)
-        CGEvent.tapEnable(tap: eventTap, enable: true)
+        return startEventTapThread(source: source, eventTap: eventTap)
+    }
+
+    private func startEventTapThread(source: CFRunLoopSource, eventTap: CFMachPort) -> Bool {
+        let semaphore = DispatchSemaphore(value: 0)
+        let thread = Thread { [weak self] in
+            guard let self else {
+                semaphore.signal()
+                return
+            }
+
+            Thread.current.name = "com.metrovoc.voiceink.shortcut-monitor"
+            Thread.current.qualityOfService = .userInteractive
+
+            let runLoop = CFRunLoopGetCurrent()
+            self.eventTapRunLoop = runLoop
+            CFRunLoopAddSource(runLoop, source, .commonModes)
+            CGEvent.tapEnable(tap: eventTap, enable: true)
+            semaphore.signal()
+            CFRunLoopRun()
+            CFRunLoopRemoveSource(runLoop, source, .commonModes)
+        }
+
+        thread.name = "com.metrovoc.voiceink.shortcut-monitor"
+        thread.qualityOfService = .userInteractive
+        eventTapThread = thread
+        thread.start()
+
+        let result = semaphore.wait(timeout: .now() + .seconds(2))
+        if result == .timedOut {
+            CFMachPortInvalidate(eventTap)
+            eventTapThread = nil
+            eventTapRunLoop = nil
+            eventTapRunLoopSource = nil
+            self.eventTap = nil
+            logger.error("Timed out starting global shortcut event tap thread")
+            return false
+        }
+
         return true
     }
 
@@ -128,6 +185,8 @@ final class ShortcutMonitor {
 
         let keyCode = UInt16(event.getIntegerValueField(.keyboardEventKeycode))
         let modifierFlags = NSEvent.ModifierFlags(rawValue: UInt(event.flags.rawValue))
+        stateLock.lock()
+        defer { stateLock.unlock() }
         return handleEvent(
             kind: eventKind,
             keyCode: keyCode,
@@ -138,6 +197,8 @@ final class ShortcutMonitor {
 
     private func resetPressedShortcutsAfterTapInterruption() {
         let eventTime = ProcessInfo.processInfo.systemUptime
+        stateLock.lock()
+        defer { stateLock.unlock() }
         let pressedActions = shortcuts.compactMap { action, state in
             state.isDown ? action : nil
         }
@@ -313,21 +374,36 @@ final class ShortcutMonitor {
     }
 
     private func dispatchKeyDown(for action: ShortcutAction, eventTime: TimeInterval) {
-        DispatchQueue.main.async { [onKeyDown] in
-            onKeyDown?(action, eventTime)
+        let callback = onKeyDown
+        let generation = generation
+        DispatchQueue.main.async { [weak self, callback] in
+            guard self?.isCurrentGeneration(generation) == true else { return }
+            callback?(action, eventTime)
         }
     }
 
     private func dispatchKeyUp(for action: ShortcutAction, eventTime: TimeInterval) {
-        DispatchQueue.main.async { [onKeyUp] in
-            onKeyUp?(action, eventTime)
+        let callback = onKeyUp
+        let generation = generation
+        DispatchQueue.main.async { [weak self, callback] in
+            guard self?.isCurrentGeneration(generation) == true else { return }
+            callback?(action, eventTime)
         }
     }
 
     private func dispatchShortcutInterrupted(for action: ShortcutAction, eventTime: TimeInterval) {
-        DispatchQueue.main.async { [onShortcutInterrupted] in
-            onShortcutInterrupted?(action, eventTime)
+        let callback = onShortcutInterrupted
+        let generation = generation
+        DispatchQueue.main.async { [weak self, callback] in
+            guard self?.isCurrentGeneration(generation) == true else { return }
+            callback?(action, eventTime)
         }
+    }
+
+    private func isCurrentGeneration(_ generation: Int) -> Bool {
+        stateLock.lock()
+        defer { stateLock.unlock() }
+        return self.generation == generation
     }
 
     private static let eventMask: CGEventMask = [
