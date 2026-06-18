@@ -206,7 +206,15 @@ class RecorderUIManager: ObservableObject, RecorderPanelPresenting {
             isRecorderPanelVisible = true
             await engine.toggleRecord(modeId: modeId)
         case .stopRecording:
+            let previousState = engine.recordingState
             await engine.toggleRecord(modeId: modeId)
+            if RecordingInteractionPolicy.shouldDismissPanelAfterStop(
+                previousState: previousState,
+                currentState: engine.recordingState,
+                isRecorderVisible: isRecorderPanelVisible
+            ) {
+                await dismissRecorderPanel()
+            }
         case .startAssistantFollowUp:
             SoundManager.shared.playStartSound()
             await engine.toggleRecord(

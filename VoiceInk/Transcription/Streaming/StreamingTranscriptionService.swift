@@ -183,6 +183,7 @@ class StreamingTranscriptionService: StreamingTranscriptionServicing {
     private let providerFactory: ProviderFactory
     private let drainTimeoutNanoseconds: UInt64
     private let finalCommitTimeoutNanoseconds: UInt64
+    private let disconnectTimeoutNanoseconds: UInt64
     private var onPartialTranscript: ((String) -> Void)?
     private let metrics = StreamingMetrics()
     private var stopStartedAt: Date?
@@ -198,7 +199,8 @@ class StreamingTranscriptionService: StreamingTranscriptionServicing {
         providerFactory: ProviderFactory? = nil,
         maxBufferedChunks: Int = 600,
         drainTimeoutNanoseconds: UInt64 = 3_000_000_000,
-        finalCommitTimeoutNanoseconds: UInt64 = 10_000_000_000
+        finalCommitTimeoutNanoseconds: UInt64 = 10_000_000_000,
+        disconnectTimeoutNanoseconds: UInt64 = 2_000_000_000
     ) {
         self.modelContext = modelContext
         self.fluidAudioService = fluidAudioService
@@ -206,6 +208,7 @@ class StreamingTranscriptionService: StreamingTranscriptionServicing {
         self.chunkSource = AudioChunkSource(maxBufferedChunks: maxBufferedChunks)
         self.drainTimeoutNanoseconds = drainTimeoutNanoseconds
         self.finalCommitTimeoutNanoseconds = finalCommitTimeoutNanoseconds
+        self.disconnectTimeoutNanoseconds = disconnectTimeoutNanoseconds
         self.onPartialTranscript = onPartialTranscript
     }
 
@@ -235,7 +238,6 @@ class StreamingTranscriptionService: StreamingTranscriptionServicing {
         realtimeActivity.begin(reason: "Realtime transcription")
         state = .connecting
         committedSegments = []
-        metrics.reset()
         failureState.reset()
         firstPartialLogged = false
         firstCommitLogged = false
@@ -307,6 +309,7 @@ class StreamingTranscriptionService: StreamingTranscriptionServicing {
             if let failure = failureState.current() {
                 throw failure
             }
+            try throwIfAudioDropped()
         } catch {
             state = .failed
             await cleanupStreaming()
@@ -487,6 +490,16 @@ class StreamingTranscriptionService: StreamingTranscriptionServicing {
         logger.notice("Streaming drain finished elapsed=\(Date().timeIntervalSince(start), format: .fixed(precision: 3), privacy: .public)s receivedChunks=\(snapshot.receivedChunks, privacy: .public) sentChunks=\(snapshot.sentChunks, privacy: .public) droppedChunks=\(snapshot.droppedChunks, privacy: .public) receivedBytes=\(snapshot.receivedBytes, privacy: .public) sentBytes=\(snapshot.sentBytes, privacy: .public) droppedBytes=\(snapshot.droppedBytes, privacy: .public)")
     }
 
+    private func throwIfAudioDropped() throws {
+        let snapshot = metrics.snapshot()
+        guard snapshot.droppedChunks > 0 else { return }
+        logger.error("Streaming audio dropped chunks=\(snapshot.droppedChunks, privacy: .public) bytes=\(snapshot.droppedBytes, privacy: .public); falling back to batch transcription")
+        throw StreamingTranscriptionError.audioDropped(
+            chunks: snapshot.droppedChunks,
+            bytes: snapshot.droppedBytes
+        )
+    }
+
     /// Consumes transcription events throughout the session, accumulating committed segments.
     private func startEventConsumer() {
         guard let provider = provider else { return }
@@ -605,10 +618,47 @@ class StreamingTranscriptionService: StreamingTranscriptionServicing {
         chunkSource.finish()
         commitSignal?.finish()
         commitSignal = nil
-        await provider?.disconnect()
+        if let provider {
+            await disconnectProvider(provider)
+        }
         provider = nil
         realtimeActivity.end()
         state = .idle
         committedSegments = []
+    }
+
+    private func disconnectProvider(_ provider: StreamingTranscriptionProvider) async {
+        let timeoutNanoseconds = disconnectTimeoutNanoseconds
+        let (finishedStream, finishedContinuation) = AsyncStream.makeStream(of: Void.self)
+        let disconnectTask = Task {
+            await provider.disconnect()
+            finishedContinuation.yield()
+            finishedContinuation.finish()
+        }
+
+        let completed = await withTaskGroup(of: Bool.self) { group in
+            group.addTask {
+                for await _ in finishedStream {
+                    return true
+                }
+                return false
+            }
+
+            group.addTask {
+                try? await Task.sleep(nanoseconds: timeoutNanoseconds)
+                finishedContinuation.finish()
+                return false
+            }
+
+            let result = await group.next() ?? false
+            group.cancelAll()
+            return result
+        }
+
+        if !completed {
+            disconnectTask.cancel()
+            finishedContinuation.finish()
+            logger.warning("Timed out while disconnecting streaming provider")
+        }
     }
 }
