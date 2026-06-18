@@ -55,8 +55,7 @@ final class StreamingTranscriptionSession: TranscriptionSession {
     private var model: (any TranscriptionModel)?
     private var context: TranscriptionRequestContext = .currentDefaults
     private var streamingFailed = false
-    private var startupTask: Task<Void, Never>?
-    private var startupTaskID: UUID?
+    private var isCancelled = false
     private let logger = Logger(subsystem: AppIdentity.loggerSubsystem, category: "StreamingTranscriptionSession")
 
     init(streamingService: any StreamingTranscriptionServicing, fallbackService: TranscriptionService) {
@@ -70,43 +69,35 @@ final class StreamingTranscriptionSession: TranscriptionSession {
 
         self.model = model
         self.context = context
+        self.streamingFailed = false
+        self.isCancelled = false
         logger.notice("Streaming session prepare model=\(model.displayName, privacy: .public)")
 
-        // Return callback immediately; WebSocket connects in background
+        let start = Date()
+        do {
+            try await streamingService.startStreaming(model: model, context: context)
+            guard !isCancelled else {
+                streamingService.cancel()
+                throw CancellationError()
+            }
+            logger.notice("Streaming session ready model=\(model.displayName, privacy: .public) elapsed=\(Date().timeIntervalSince(start), format: .fixed(precision: 3), privacy: .public)s")
+        } catch is CancellationError {
+            streamingService.cancel()
+            throw CancellationError()
+        } catch {
+            guard !isCancelled else {
+                streamingService.cancel()
+                throw CancellationError()
+            }
+            streamingFailed = true
+            let desc = error.localizedDescription
+            logger.error("❌ Failed to prepare streaming session: \(desc, privacy: .public)")
+            throw error
+        }
+
         let service = streamingService
         let callback: (Data) -> Void = { data in
             service.sendAudioChunk(data)
-        }
-
-        startupTask?.cancel()
-        let taskID = UUID()
-        startupTaskID = taskID
-        startupTask = Task { [weak self] in
-            guard let self = self else { return }
-            defer {
-                if self.startupTaskID == taskID {
-                    self.startupTask = nil
-                    self.startupTaskID = nil
-                }
-            }
-            guard !Task.isCancelled else { return }
-
-            do {
-                let start = Date()
-                try await self.streamingService.startStreaming(model: model, context: context)
-                guard !Task.isCancelled else {
-                    self.streamingService.cancel()
-                    return
-                }
-                self.logger.notice("Streaming session connected model=\(model.displayName, privacy: .public) elapsed=\(Date().timeIntervalSince(start), format: .fixed(precision: 3), privacy: .public)s")
-            } catch is CancellationError {
-                self.streamingService.cancel()
-            } catch {
-                guard !Task.isCancelled else { return }
-                let desc = error.localizedDescription
-                self.logger.error("❌ Failed to start streaming, will fall back to batch: \(desc, privacy: .public)")
-                self.streamingFailed = true
-            }
         }
 
         return callback
@@ -143,9 +134,7 @@ final class StreamingTranscriptionSession: TranscriptionSession {
     }
 
     func cancel() {
-        startupTask?.cancel()
-        startupTask = nil
-        startupTaskID = nil
+        isCancelled = true
         streamingService.cancel()
     }
 }
