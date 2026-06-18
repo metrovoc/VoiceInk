@@ -37,6 +37,7 @@ class RecorderUIManager: ObservableObject, RecorderPanelPresenting {
             rebuildVisiblePanel(previousStyle: oldValue)
             UserDefaults.standard.set(recorderPanelStyle.rawValue, forKey: "RecorderType")
             if !isRecorderPanelVisible {
+                destroyPanel(style: oldValue)
                 prepareRecorderPanel()
             }
         }
@@ -168,10 +169,8 @@ class RecorderUIManager: ObservableObject, RecorderPanelPresenting {
         }
     }
 
-    private func rebuildVisiblePanel(previousStyle: RecorderPanelStyle) {
-        guard isRecorderPanelVisible else { return }
-
-        switch previousStyle {
+    private func destroyPanel(style: RecorderPanelStyle) {
+        switch style {
         case .notch:
             notchWindowManager?.destroyWindow()
             notchWindowManager = nil
@@ -179,6 +178,12 @@ class RecorderUIManager: ObservableObject, RecorderPanelPresenting {
             miniWindowManager?.destroyWindow()
             miniWindowManager = nil
         }
+    }
+
+    private func rebuildVisiblePanel(previousStyle: RecorderPanelStyle) {
+        guard isRecorderPanelVisible else { return }
+
+        destroyPanel(style: previousStyle)
 
         Task { @MainActor in
             try? await Task.sleep(nanoseconds: 50_000_000)

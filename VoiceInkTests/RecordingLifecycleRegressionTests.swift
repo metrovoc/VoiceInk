@@ -175,6 +175,36 @@ struct RecordingLifecycleRegressionTests {
     }
 
     @MainActor
+    @Test func streamingSessionFallsBackAndCancelsWhenStreamingStartTimesOut() async throws {
+        let streamingService = DelayedStartStreamingService()
+        let fallbackService = FakeBatchTranscriptionService(result: "batch transcript")
+        let streamingModel = makeCloudModel(name: "deepgram-live", provider: .deepgram)
+        let session = StreamingTranscriptionSession(
+            streamingService: streamingService,
+            fallbackService: fallbackService,
+            streamingStartTimeoutNanoseconds: 20_000_000
+        )
+
+        let preparedCallback = try await session.prepare(
+            configuration: TranscriptionRuntimeConfiguration(
+                mode: nil,
+                model: streamingModel,
+                language: "en",
+                isRealtimeEnabled: true
+            )
+        )
+        let callback = try #require(preparedCallback)
+        callback(Data([0x01]))
+
+        let text = try await session.transcribe(audioURL: URL(fileURLWithPath: "/tmp/voiceink-test.wav"))
+
+        #expect(text == "batch transcript")
+        #expect(streamingService.cancelCallCount >= 1)
+        #expect(streamingService.stopCallCount == 0)
+        #expect(fallbackService.transcribeCallCount == 1)
+    }
+
+    @MainActor
     @Test func streamingServiceFailsWithoutCommitWhenAudioSendFails() async throws {
         let provider = FakeStreamingProvider(
             commitEvent: .committed(text: "should not commit"),
@@ -404,9 +434,19 @@ private final class DelayedStartStreamingService: StreamingTranscriptionServicin
     private var startContinuation: CheckedContinuation<Void, Never>?
     private var _sentChunks: [Data] = []
     private var _startCallCount = 0
+    private var _stopCallCount = 0
+    private var _cancelCallCount = 0
 
     var startCallCount: Int {
         withLock { _startCallCount }
+    }
+
+    var stopCallCount: Int {
+        withLock { _stopCallCount }
+    }
+
+    var cancelCallCount: Int {
+        withLock { _cancelCallCount }
     }
 
     var sentChunks: [Data] {
@@ -430,11 +470,13 @@ private final class DelayedStartStreamingService: StreamingTranscriptionServicin
 
     @MainActor
     func stopAndGetFinalText() async throws -> String {
-        "streaming transcript"
+        withLock { _stopCallCount += 1 }
+        return "streaming transcript"
     }
 
     @MainActor
     func cancel() {
+        withLock { _cancelCallCount += 1 }
         releaseStart()
     }
 

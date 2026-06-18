@@ -227,6 +227,10 @@ class StreamingTranscriptionService: StreamingTranscriptionServicing {
 
     /// Start a streaming transcription session for the given model.
     func startStreaming(model: any TranscriptionModel, context: TranscriptionRequestContext) async throws {
+        guard state != .cancelled else {
+            throw CancellationError()
+        }
+
         let start = Date()
         realtimeActivity.begin(reason: "Realtime transcription")
         state = .connecting

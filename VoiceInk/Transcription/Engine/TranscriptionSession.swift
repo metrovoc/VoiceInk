@@ -87,6 +87,11 @@ final class StreamingTranscriptionSession: TranscriptionSession {
             guard let self else { return }
 
             do {
+                try Task.checkCancellation()
+                guard !self.isCancelled else {
+                    service.cancel()
+                    throw CancellationError()
+                }
                 try await service.startStreaming(model: model, context: context)
                 guard !self.isCancelled else {
                     service.cancel()
@@ -170,13 +175,17 @@ final class StreamingTranscriptionSession: TranscriptionSession {
             }
 
             let result = try await group.next() ?? false
+            if !result {
+                isCancelled = true
+                startTask.cancel()
+                streamingService.cancel()
+                streamingFailed = true
+            }
             group.cancelAll()
             return result
         }
 
         guard started else {
-            streamingService.cancel()
-            streamingFailed = true
             logger.error("❌ Timed out waiting for streaming session to become ready")
             throw StreamingTranscriptionError.timeout
         }

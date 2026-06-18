@@ -442,6 +442,11 @@ final class RecordingShortcutModeHandler {
 
         case .pushToTalk:
             if isRecorderVisible() {
+                if recordingState() == .starting {
+                    await cancelRecording()
+                    shortcutPressStartTime = nil
+                    return
+                }
                 guard canHandleShortcutAction() else { return }
                 await toggleRecorderPanel(modeId)
             }
