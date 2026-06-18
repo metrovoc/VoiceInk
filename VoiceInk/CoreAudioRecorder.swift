@@ -76,12 +76,21 @@ final class CoreAudioRecorder: @unchecked Sendable {
     // MARK: - Public Interface
 
     /// Prepares AUHAL for the selected device without starting capture.
-    func prepare(deviceID: AudioDeviceID) throws {
+    func prepare(deviceID: AudioDeviceID, shouldCancel: (() -> Bool)? = nil) throws {
+        func checkCancellation() throws {
+            if shouldCancel?() == true {
+                throw CancellationError()
+            }
+        }
+
+        try checkCancellation()
+
         if isRecording {
             return
         }
 
         try validateDevice(deviceID)
+        try checkCancellation()
 
         if isPrepared(for: deviceID) {
             return
@@ -93,19 +102,28 @@ final class CoreAudioRecorder: @unchecked Sendable {
         logDeviceDetails(deviceID: deviceID)
 
         do {
+            try checkCancellation()
             try createAudioUnit()
 
+            try checkCancellation()
             try setInputDevice(deviceID)
 
+            try checkCancellation()
             try configureFormats()
 
+            try checkCancellation()
             try setupInputCallback()
 
+            try checkCancellation()
             try initializeAudioUnit()
         } catch {
             teardownPreparedAudioUnit()
             throw error
         }
+    }
+
+    func isPreparedForDevice(_ deviceID: AudioDeviceID) -> Bool {
+        isPrepared(for: deviceID)
     }
 
     /// Starts recording from the specified device to the given URL (WAV format)

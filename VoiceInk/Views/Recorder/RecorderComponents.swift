@@ -43,8 +43,10 @@ struct RecorderRecordButton: View {
 
     private var visualState: VisualState {
         switch recordingState {
-        case .idle, .starting, .busy:
+        case .idle, .busy:
             return .ready
+        case .starting:
+            return .recording
         case .recording:
             return .recording
         case .transcribing, .enhancing:
@@ -54,9 +56,9 @@ struct RecorderRecordButton: View {
 
     private var isDisabled: Bool {
         switch recordingState {
-        case .idle, .recording:
+        case .idle, .starting, .recording:
             return false
-        case .starting, .transcribing, .enhancing, .busy:
+        case .transcribing, .enhancing, .busy:
             return true
         }
     }
@@ -350,7 +352,11 @@ struct RecorderStatusDisplay: View {
 
     var body: some View {
         Group {
-            if currentState == .enhancing {
+            if currentState == .starting {
+                AudioVisualizer(audioMeter: audioMeter, color: .white, isActive: true)
+                    .scaleEffect(y: menuBarHeight != nil ? min(1.0, (menuBarHeight! - 8) / 25) : 1.0, anchor: .center)
+                    .transition(.opacity)
+            } else if currentState == .enhancing {
                 ProcessingStatusDisplay(mode: .enhancing, color: .white).transition(.opacity)
             } else if currentState == .transcribing {
                 ProcessingStatusDisplay(mode: .transcribing, color: .white).transition(.opacity)

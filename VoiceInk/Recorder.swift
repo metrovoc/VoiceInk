@@ -1,6 +1,7 @@
 import Foundation
 import AVFoundation
 import CoreAudio
+import AppKit
 import os
 
 @MainActor
@@ -13,11 +14,14 @@ class Recorder: NSObject, ObservableObject {
     private var isReconfiguring = false
     private let mediaController = MediaController.shared
     private let playbackController = PlaybackController.shared
+    private var microphonePermissionObserver: NSObjectProtocol?
+    private var appActivationObserver: NSObjectProtocol?
     @Published var audioMeter = AudioMeter(averagePower: 0, peakPower: 0)
     private var audioMeterUpdateTimer: DispatchSourceTimer?
     private let audioMeterQueue = DispatchQueue(label: "com.metrovoc.voiceink.audiometer", qos: .userInteractive)
     /// Dedicated serial queue for hardware setup.
-    private let audioSetupQueue = DispatchQueue(label: "com.metrovoc.voiceink.audioSetup", qos: .userInitiated)
+    private let audioSetupQueue = DispatchQueue(label: "com.metrovoc.voiceink.audioSetup", qos: .userInteractive)
+    private var pendingWarmUpWorkItem: DispatchWorkItem?
     private var audioMuteTask: Task<Void, Never>?
     private var audioRestorationTask: Task<Void, Never>?
     private let smoothedValuesLock = NSLock()
@@ -38,7 +42,9 @@ class Recorder: NSObject, ObservableObject {
         super.init()
         setupDeviceSwitchObserver()
         setupAudioDeviceChangedObserver()
-        schedulePrepareForCurrentDevice(reason: "init")
+        setupMicrophonePermissionObserver()
+        setupAppActivationObserver()
+        warmUpForCurrentDevice(reason: "init")
     }
 
     private func setupDeviceSwitchObserver() {
@@ -61,7 +67,33 @@ class Recorder: NSObject, ObservableObject {
         ) { [weak self] _ in
             Task { @MainActor in
                 guard let self, !self.deviceManager.isRecordingActive else { return }
-                self.schedulePrepareForCurrentDevice(reason: "device-changed")
+                self.warmUpForCurrentDevice(reason: "device-changed")
+            }
+        }
+    }
+
+    private func setupMicrophonePermissionObserver() {
+        microphonePermissionObserver = NotificationCenter.default.addObserver(
+            forName: .microphonePermissionDidChange,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in
+                guard let self, !self.deviceManager.isRecordingActive else { return }
+                self.warmUpForCurrentDevice(reason: "microphone-permission-changed")
+            }
+        }
+    }
+
+    private func setupAppActivationObserver() {
+        appActivationObserver = NotificationCenter.default.addObserver(
+            forName: NSApplication.didBecomeActiveNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in
+                guard let self, !self.deviceManager.isRecordingActive else { return }
+                self.warmUpForCurrentDevice(reason: "app-activated")
             }
         }
     }
@@ -122,6 +154,7 @@ class Recorder: NSObject, ObservableObject {
     }
 
     func startRecording(toOutputFile url: URL) async throws {
+        cancelPendingWarmUp()
         deviceManager.isRecordingActive = true
 
         let currentDeviceID = deviceManager.getCurrentDevice()
@@ -160,6 +193,7 @@ class Recorder: NSObject, ObservableObject {
             }
 
             startAudioMeterTimer()
+            logger.notice("Recording hardware started deviceID=\(deviceID, privacy: .public)")
             Task { [weak self] in
                 guard let self else { return }
                 await self.playbackController.pauseMedia()
@@ -200,6 +234,7 @@ class Recorder: NSObject, ObservableObject {
             await playbackController.resumeMedia()
         }
         deviceManager.isRecordingActive = false
+        warmUpForCurrentDevice(reason: "post-stop")
     }
 
     private func handleRecordingError(_ error: Error) async {
@@ -227,6 +262,20 @@ class Recorder: NSObject, ObservableObject {
         audioMeterUpdateTimer = timer
     }
 
+    var isPreparedForCurrentDevice: Bool {
+        guard let recorder else { return false }
+        return recorder.isPreparedForDevice(deviceManager.getCurrentDevice())
+    }
+
+    func warmUpForCurrentDevice(reason: String) {
+        schedulePrepareForCurrentDevice(reason: reason)
+    }
+
+    private func cancelPendingWarmUp() {
+        pendingWarmUpWorkItem?.cancel()
+        pendingWarmUpWorkItem = nil
+    }
+
     private func schedulePrepareForCurrentDevice(reason: String) {
         guard AVCaptureDevice.authorizationStatus(for: .audio) == .authorized else {
             return
@@ -242,13 +291,26 @@ class Recorder: NSObject, ObservableObject {
         coreAudioRecorder.onAudioChunk = onAudioChunk
         recorder = coreAudioRecorder
 
-        audioSetupQueue.async { [logger] in
+        cancelPendingWarmUp()
+        let startedAt = ProcessInfo.processInfo.systemUptime
+        var workItem: DispatchWorkItem?
+        let item = DispatchWorkItem { [logger] in
+            guard workItem?.isCancelled == false else { return }
+            let wasPrepared = coreAudioRecorder.isPreparedForDevice(deviceID)
             do {
-                try coreAudioRecorder.prepare(deviceID: deviceID)
+                try coreAudioRecorder.prepare(deviceID: deviceID) {
+                    workItem?.isCancelled == true
+                }
+                logger.notice("Recorder warm-up finished reason=\(reason, privacy: .public) deviceID=\(deviceID, privacy: .public) wasPrepared=\(wasPrepared, privacy: .public) elapsed=\(ProcessInfo.processInfo.systemUptime - startedAt, format: .fixed(precision: 3), privacy: .public)s")
+            } catch is CancellationError {
+                logger.debug("Recorder warm-up cancelled reason=\(reason, privacy: .public) deviceID=\(deviceID, privacy: .public)")
             } catch {
                 logger.warning("Recorder prepare failed reason=\(reason, privacy: .public) deviceID=\(deviceID, privacy: .public) error=\(error, privacy: .public)")
             }
         }
+        workItem = item
+        pendingWarmUpWorkItem = item
+        audioSetupQueue.async(execute: item)
     }
 
     private func updateAudioMeter() {
@@ -305,6 +367,14 @@ class Recorder: NSObject, ObservableObject {
         if let observer = audioDeviceChangedObserver {
             NotificationCenter.default.removeObserver(observer)
         }
+        if let observer = microphonePermissionObserver {
+            NotificationCenter.default.removeObserver(observer)
+        }
+        if let observer = appActivationObserver {
+            NotificationCenter.default.removeObserver(observer)
+        }
+        pendingWarmUpWorkItem?.cancel()
+        pendingWarmUpWorkItem = nil
         recorder?.teardown()
     }
 }

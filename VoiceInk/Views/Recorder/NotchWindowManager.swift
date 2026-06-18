@@ -30,8 +30,12 @@ class NotchWindowManager {
         }
     }
 
-    func show() {
+    func prepare() {
         if panel == nil { initializeWindow() }
+    }
+
+    func show() {
+        prepare()
         panel?.show()
     }
 
