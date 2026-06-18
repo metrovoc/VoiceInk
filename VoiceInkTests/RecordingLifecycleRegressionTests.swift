@@ -63,6 +63,30 @@ struct RecordingLifecycleRegressionTests {
     }
 
     @MainActor
+    @Test func streamingServiceSendsAudioBufferedBeforeConnection() async throws {
+        let provider = FakeStreamingProvider(commitEvent: .committed(text: "final text"))
+        let service = try StreamingTranscriptionService(
+            modelContext: makeModelContext(),
+            providerFactory: { _, _, _ in provider },
+            finalCommitTimeoutNanoseconds: 200_000_000
+        )
+
+        let earlyChunk = Data([0x7A, 0x7B])
+        service.sendAudioChunk(earlyChunk)
+
+        try await service.startStreaming(
+            model: makeCloudModel(name: "deepgram-live", provider: .deepgram),
+            context: TranscriptionRequestContext(language: "en", prompt: nil)
+        )
+
+        let text = try await service.stopAndGetFinalText()
+
+        #expect(text == "final text")
+        #expect(provider.sentChunks == [earlyChunk])
+        #expect(provider.sentChunkCountAtCommit == 1)
+    }
+
+    @MainActor
     @Test func streamingServiceTimesOutWhenFinalCommitNeverArrives() async throws {
         let provider = FakeStreamingProvider(commitEvent: nil)
         let service = try StreamingTranscriptionService(
@@ -115,7 +139,7 @@ struct RecordingLifecycleRegressionTests {
     }
 
     @MainActor
-    @Test func streamingSessionWaitsForStreamingStartBeforeReturningAudioCallback() async throws {
+    @Test func streamingSessionReturnsAudioCallbackBeforeStreamingStart() async throws {
         let streamingService = DelayedStartStreamingService()
         let fallbackService = FakeBatchTranscriptionService(result: "batch transcript")
         let streamingModel = makeCloudModel(name: "deepgram-live", provider: .deepgram)
@@ -135,17 +159,19 @@ struct RecordingLifecycleRegressionTests {
             )
         }
 
-        try await Task.sleep(nanoseconds: 20_000_000)
-        #expect(streamingService.startCallCount == 1)
-        #expect(streamingService.sentChunks.isEmpty)
-
-        streamingService.releaseStart()
         let preparedCallback = try await prepareTask.value
         let callback = try #require(preparedCallback)
         let chunk = Data([0x2A])
         callback(chunk)
 
+        try await Task.sleep(nanoseconds: 20_000_000)
+        #expect(streamingService.startCallCount == 1)
         #expect(streamingService.sentChunks == [chunk])
+
+        streamingService.releaseStart()
+        let text = try await session.transcribe(audioURL: URL(fileURLWithPath: "/tmp/voiceink-test.wav"))
+
+        #expect(text == "streaming transcript")
     }
 
     @MainActor

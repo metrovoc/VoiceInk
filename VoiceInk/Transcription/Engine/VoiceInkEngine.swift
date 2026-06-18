@@ -158,8 +158,13 @@ class VoiceInkEngine: NSObject, ObservableObject {
             requestRecordPermission { [self] granted in
                 if granted {
                     Task { @MainActor [self] in
+                        let startupStartedAt = ProcessInfo.processInfo.systemUptime
+                        func startupElapsed() -> Double {
+                            ProcessInfo.processInfo.systemUptime - startupStartedAt
+                        }
                         let startID = UUID()
                         self.activeRecordingStartID = startID
+                        self.logger.notice("Recording startup requested id=\(startID.uuidString, privacy: .public)")
                         let activeModeTask = ActiveWindowService.shared.beginApplyingConfiguration(modeId: modeId) { [weak self] in
                             guard let self else { return false }
                             return self.activeRecordingStartID == startID && !self.shouldCancelRecording
@@ -172,8 +177,10 @@ class VoiceInkEngine: NSObject, ObservableObject {
                             self.recorder.onAudioChunk = nil
 
                             self.recordingState = .starting
+                            self.logger.notice("Recording startup state=starting elapsed=\(startupElapsed(), format: .fixed(precision: 3), privacy: .public)s")
 
                             await activeModeTask.value
+                            self.logger.notice("Recording startup mode ready elapsed=\(startupElapsed(), format: .fixed(precision: 3), privacy: .public)s")
 
                             guard self.activeRecordingStartID == startID,
                                   self.recorderUIManager?.isRecorderPanelVisible ?? false,
@@ -200,6 +207,7 @@ class VoiceInkEngine: NSObject, ObservableObject {
                                 await self.recorderUIManager?.dismissRecorderPanel()
                                 return
                             }
+                            self.logger.notice("Recording startup configuration ready model=\(transcriptionConfiguration.model.displayName, privacy: .public) realtime=\(transcriptionConfiguration.isRealtimeEnabled, privacy: .public) elapsed=\(startupElapsed(), format: .fixed(precision: 3), privacy: .public)s")
 
                             let audioChunkCallback: ((Data) -> Void)?
                             if self.serviceRegistry.shouldUseRealtimeTranscription(for: transcriptionConfiguration) {
@@ -219,6 +227,7 @@ class VoiceInkEngine: NSObject, ObservableObject {
                                 self.currentSession = session
                                 self.currentSessionTranscriptionConfiguration = transcriptionConfiguration
                                 audioChunkCallback = try await session.prepare(configuration: transcriptionConfiguration)
+                                self.logger.notice("Recording startup realtime callback ready elapsed=\(startupElapsed(), format: .fixed(precision: 3), privacy: .public)s")
                             } else {
                                 self.currentSession = nil
                                 self.currentSessionTranscriptionConfiguration = nil
@@ -240,6 +249,7 @@ class VoiceInkEngine: NSObject, ObservableObject {
                             self.recorder.onAudioChunk = audioChunkCallback
                             self.recorder.scheduleSystemMute()
                             try await self.recorder.startRecording(toOutputFile: permanentURL)
+                            self.logger.notice("Recording startup audio capture started elapsed=\(startupElapsed(), format: .fixed(precision: 3), privacy: .public)s")
 
                             guard self.activeRecordingStartID == startID,
                                   self.recorderUIManager?.isRecorderPanelVisible ?? false,
@@ -258,6 +268,7 @@ class VoiceInkEngine: NSObject, ObservableObject {
                             }
 
                             self.recordingState = .recording
+                            self.logger.notice("Recording startup state=recording elapsed=\(startupElapsed(), format: .fixed(precision: 3), privacy: .public)s")
                             self.startRecordingContextCapture()
 
                             Task { @MainActor [weak self] in

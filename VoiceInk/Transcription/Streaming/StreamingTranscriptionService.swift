@@ -196,7 +196,7 @@ class StreamingTranscriptionService: StreamingTranscriptionServicing {
         fluidAudioService: FluidAudioTranscriptionService? = nil,
         onPartialTranscript: ((String) -> Void)? = nil,
         providerFactory: ProviderFactory? = nil,
-        maxBufferedChunks: Int = 240,
+        maxBufferedChunks: Int = 600,
         drainTimeoutNanoseconds: UInt64 = 3_000_000_000,
         finalCommitTimeoutNanoseconds: UInt64 = 10_000_000_000
     ) {

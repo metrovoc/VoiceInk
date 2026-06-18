@@ -56,17 +56,25 @@ final class StreamingTranscriptionSession: TranscriptionSession {
     private var context: TranscriptionRequestContext = .currentDefaults
     private var streamingFailed = false
     private var isCancelled = false
+    private var startTask: Task<Void, Error>?
+    private let streamingStartTimeoutNanoseconds: UInt64
     private let logger = Logger(subsystem: AppIdentity.loggerSubsystem, category: "StreamingTranscriptionSession")
 
-    init(streamingService: any StreamingTranscriptionServicing, fallbackService: TranscriptionService) {
+    init(
+        streamingService: any StreamingTranscriptionServicing,
+        fallbackService: TranscriptionService,
+        streamingStartTimeoutNanoseconds: UInt64 = 5_000_000_000
+    ) {
         self.streamingService = streamingService
         self.fallbackService = fallbackService
+        self.streamingStartTimeoutNanoseconds = streamingStartTimeoutNanoseconds
     }
 
     func prepare(configuration: TranscriptionRuntimeConfiguration) async throws -> ((Data) -> Void)? {
         let model = configuration.model
         let context = configuration.requestContext
 
+        startTask?.cancel()
         self.model = model
         self.context = context
         self.streamingFailed = false
@@ -74,32 +82,37 @@ final class StreamingTranscriptionSession: TranscriptionSession {
         logger.notice("Streaming session prepare model=\(model.displayName, privacy: .public)")
 
         let start = Date()
-        do {
-            try await streamingService.startStreaming(model: model, context: context)
-            guard !isCancelled else {
-                streamingService.cancel()
+        let service = streamingService
+        startTask = Task { @MainActor [weak self, service, model, context] in
+            guard let self else { return }
+
+            do {
+                try await service.startStreaming(model: model, context: context)
+                guard !self.isCancelled else {
+                    service.cancel()
+                    throw CancellationError()
+                }
+                self.logger.notice("Streaming session ready model=\(model.displayName, privacy: .public) elapsed=\(Date().timeIntervalSince(start), format: .fixed(precision: 3), privacy: .public)s")
+            } catch is CancellationError {
+                service.cancel()
                 throw CancellationError()
+            } catch {
+                guard !self.isCancelled else {
+                    service.cancel()
+                    throw CancellationError()
+                }
+                self.streamingFailed = true
+                let desc = error.localizedDescription
+                self.logger.error("❌ Failed to prepare streaming session: \(desc, privacy: .public)")
+                throw error
             }
-            logger.notice("Streaming session ready model=\(model.displayName, privacy: .public) elapsed=\(Date().timeIntervalSince(start), format: .fixed(precision: 3), privacy: .public)s")
-        } catch is CancellationError {
-            streamingService.cancel()
-            throw CancellationError()
-        } catch {
-            guard !isCancelled else {
-                streamingService.cancel()
-                throw CancellationError()
-            }
-            streamingFailed = true
-            let desc = error.localizedDescription
-            logger.error("❌ Failed to prepare streaming session: \(desc, privacy: .public)")
-            throw error
         }
 
-        let service = streamingService
         let callback: (Data) -> Void = { data in
             service.sendAudioChunk(data)
         }
 
+        logger.notice("Streaming session audio callback ready before connection model=\(model.displayName, privacy: .public)")
         return callback
     }
 
@@ -110,6 +123,7 @@ final class StreamingTranscriptionSession: TranscriptionSession {
 
         if !streamingFailed {
             do {
+                try await waitForStreamingStartIfNeeded()
                 let start = Date()
                 logger.notice("Streaming stop/transcribe started model=\(model.displayName, privacy: .public)")
                 let text = try await streamingService.stopAndGetFinalText()
@@ -135,6 +149,36 @@ final class StreamingTranscriptionSession: TranscriptionSession {
 
     func cancel() {
         isCancelled = true
+        startTask?.cancel()
+        startTask = nil
         streamingService.cancel()
+    }
+
+    private func waitForStreamingStartIfNeeded() async throws {
+        guard let startTask else { return }
+        defer { self.startTask = nil }
+
+        let timeoutNanoseconds = streamingStartTimeoutNanoseconds
+        let started = try await withThrowingTaskGroup(of: Bool.self) { group in
+            group.addTask {
+                try await startTask.value
+                return true
+            }
+            group.addTask {
+                try await Task.sleep(nanoseconds: timeoutNanoseconds)
+                return false
+            }
+
+            let result = try await group.next() ?? false
+            group.cancelAll()
+            return result
+        }
+
+        guard started else {
+            streamingService.cancel()
+            streamingFailed = true
+            logger.error("❌ Timed out waiting for streaming session to become ready")
+            throw StreamingTranscriptionError.timeout
+        }
     }
 }

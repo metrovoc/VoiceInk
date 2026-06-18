@@ -378,6 +378,7 @@ final class ShortcutMonitor {
         let generation = generation
         DispatchQueue.main.async { [weak self, callback] in
             guard self?.isCurrentGeneration(generation) == true else { return }
+            self?.logMainDispatchDelay(kind: "keyDown", action: action, eventTime: eventTime)
             callback?(action, eventTime)
         }
     }
@@ -398,6 +399,12 @@ final class ShortcutMonitor {
             guard self?.isCurrentGeneration(generation) == true else { return }
             callback?(action, eventTime)
         }
+    }
+
+    private func logMainDispatchDelay(kind: String, action: ShortcutAction, eventTime: TimeInterval) {
+        let delay = ProcessInfo.processInfo.systemUptime - eventTime
+        guard delay > 0.050 else { return }
+        logger.notice("Shortcut \(kind, privacy: .public) main dispatch delay action=\(action.storageName, privacy: .public) elapsed=\(delay, format: .fixed(precision: 3), privacy: .public)s")
     }
 
     private func isCurrentGeneration(_ generation: Int) -> Bool {

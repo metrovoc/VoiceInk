@@ -43,8 +43,10 @@ struct RecorderRecordButton: View {
 
     private var visualState: VisualState {
         switch recordingState {
-        case .idle, .starting, .busy:
+        case .idle, .busy:
             return .ready
+        case .starting:
+            return .processing
         case .recording:
             return .recording
         case .transcribing, .enhancing:
@@ -350,7 +352,9 @@ struct RecorderStatusDisplay: View {
 
     var body: some View {
         Group {
-            if currentState == .enhancing {
+            if currentState == .starting {
+                ProcessingStatusDisplay(mode: .starting, color: .white).transition(.opacity)
+            } else if currentState == .enhancing {
                 ProcessingStatusDisplay(mode: .enhancing, color: .white).transition(.opacity)
             } else if currentState == .transcribing {
                 ProcessingStatusDisplay(mode: .transcribing, color: .white).transition(.opacity)

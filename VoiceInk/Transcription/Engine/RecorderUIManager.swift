@@ -36,6 +36,9 @@ class RecorderUIManager: ObservableObject, RecorderPanelPresenting {
             guard oldValue != recorderPanelStyle else { return }
             rebuildVisiblePanel(previousStyle: oldValue)
             UserDefaults.standard.set(recorderPanelStyle.rawValue, forKey: "RecorderType")
+            if !isRecorderPanelVisible {
+                prepareRecorderPanel()
+            }
         }
     }
 
@@ -71,63 +74,89 @@ class RecorderUIManager: ObservableObject, RecorderPanelPresenting {
         self.engine = engine
         self.recorder = recorder
         setupNotifications()
+        prepareRecorderPanel()
     }
 
     // MARK: - Recorder Panel Management
+
+    func prepareRecorderPanel() {
+        guard let engine = engine, let recorder = recorder else { return }
+
+        switch recorderPanelStyle {
+        case .notch:
+            notchWindowManager(for: engine, recorder: recorder).prepare()
+        case .mini:
+            miniWindowManager(for: engine, recorder: recorder).prepare()
+        }
+    }
 
     private func showRecorderPanel() {
         guard let engine = engine, let recorder = recorder else { return }
 
         switch recorderPanelStyle {
         case .notch:
-            if notchWindowManager == nil {
-                notchWindowManager = NotchWindowManager(
-                    engine: engine,
-                    recorder: recorder,
-                    assistantSession: engine.assistantSession,
-                    onRecordButtonTapped: { [weak self] in
-                        Task { @MainActor in
-                            await self?.toggleRecorderPanel()
-                        }
-                    },
-                    onCloseTapped: { [weak self] in
-                        Task { @MainActor in
-                            await self?.dismissRecorderPanel()
-                        }
-                    },
-                    onAssistantFollowUp: { [weak engine] text in
-                        Task { @MainActor in
-                            await engine?.sendAssistantFollowUp(text)
-                        }
-                    }
-                )
-            }
-            notchWindowManager?.show()
+            notchWindowManager(for: engine, recorder: recorder).show()
         case .mini:
-            if miniWindowManager == nil {
-                miniWindowManager = MiniWindowManager(
-                    engine: engine,
-                    recorder: recorder,
-                    assistantSession: engine.assistantSession,
-                    onRecordButtonTapped: { [weak self] in
-                        Task { @MainActor in
-                            await self?.toggleRecorderPanel()
-                        }
-                    },
-                    onCloseTapped: { [weak self] in
-                        Task { @MainActor in
-                            await self?.dismissRecorderPanel()
-                        }
-                    },
-                    onAssistantFollowUp: { [weak engine] text in
-                        Task { @MainActor in
-                            await engine?.sendAssistantFollowUp(text)
-                        }
-                    }
-                )
-            }
-            miniWindowManager?.show()
+            miniWindowManager(for: engine, recorder: recorder).show()
         }
+    }
+
+    private func notchWindowManager(for engine: VoiceInkEngine, recorder: Recorder) -> NotchWindowManager {
+        if let notchWindowManager {
+            return notchWindowManager
+        }
+
+        let manager = NotchWindowManager(
+            engine: engine,
+            recorder: recorder,
+            assistantSession: engine.assistantSession,
+            onRecordButtonTapped: { [weak self] in
+                Task { @MainActor in
+                    await self?.toggleRecorderPanel()
+                }
+            },
+            onCloseTapped: { [weak self] in
+                Task { @MainActor in
+                    await self?.dismissRecorderPanel()
+                }
+            },
+            onAssistantFollowUp: { [weak engine] text in
+                Task { @MainActor in
+                    await engine?.sendAssistantFollowUp(text)
+                }
+            }
+        )
+        notchWindowManager = manager
+        return manager
+    }
+
+    private func miniWindowManager(for engine: VoiceInkEngine, recorder: Recorder) -> MiniWindowManager {
+        if let miniWindowManager {
+            return miniWindowManager
+        }
+
+        let manager = MiniWindowManager(
+            engine: engine,
+            recorder: recorder,
+            assistantSession: engine.assistantSession,
+            onRecordButtonTapped: { [weak self] in
+                Task { @MainActor in
+                    await self?.toggleRecorderPanel()
+                }
+            },
+            onCloseTapped: { [weak self] in
+                Task { @MainActor in
+                    await self?.dismissRecorderPanel()
+                }
+            },
+            onAssistantFollowUp: { [weak engine] text in
+                Task { @MainActor in
+                    await engine?.sendAssistantFollowUp(text)
+                }
+            }
+        )
+        miniWindowManager = manager
+        return manager
     }
 
     private func hideRecorderPanel() {
