@@ -16,7 +16,7 @@ final class Recorder: NSObject, ObservableObject {
     private let playbackController = PlaybackController.shared
     private var microphonePermissionObserver: NSObjectProtocol?
     private var appActivationObserver: NSObjectProtocol?
-    @Published var audioMeter = AudioMeter(averagePower: 0, peakPower: 0)
+    @Published var audioMeter = AudioMeter(averagePower: -160, peakPower: -160)
     private var audioMuteTask: Task<Void, Never>?
     private var audioRestorationTask: Task<Void, Never>?
 
@@ -273,6 +273,7 @@ final class Recorder: NSObject, ObservableObject {
 }
 
 struct AudioMeter: Equatable {
+    /// Average and peak input power in dBFS as reported by Core Audio.
     let averagePower: Double
     let peakPower: Double
 }

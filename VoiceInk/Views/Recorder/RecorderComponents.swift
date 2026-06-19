@@ -341,29 +341,25 @@ struct LiveTranscriptView: View {
 
 struct RecorderStatusDisplay: View {
     let currentState: RecordingState
-    let audioMeter: AudioMeter
+    @ObservedObject var recorder: Recorder
     let menuBarHeight: CGFloat?
 
-    init(currentState: RecordingState, audioMeter: AudioMeter, menuBarHeight: CGFloat? = nil) {
+    init(currentState: RecordingState, recorder: Recorder, menuBarHeight: CGFloat? = nil) {
         self.currentState = currentState
-        self.audioMeter = audioMeter
+        self.recorder = recorder
         self.menuBarHeight = menuBarHeight
     }
 
     var body: some View {
         Group {
-            if currentState == .starting {
-                AudioVisualizer(audioMeter: audioMeter, color: .white, isActive: true)
+            if currentState == .starting || currentState == .recording {
+                AudioVisualizer(audioMeter: recorder.audioMeter, color: .white, isActive: true)
                     .scaleEffect(y: menuBarHeight != nil ? min(1.0, (menuBarHeight! - 8) / 25) : 1.0, anchor: .center)
                     .transition(.opacity)
             } else if currentState == .enhancing {
                 ProcessingStatusDisplay(mode: .enhancing, color: .white).transition(.opacity)
             } else if currentState == .transcribing {
                 ProcessingStatusDisplay(mode: .transcribing, color: .white).transition(.opacity)
-            } else if currentState == .recording {
-                AudioVisualizer(audioMeter: audioMeter, color: .white, isActive: true)
-                    .scaleEffect(y: menuBarHeight != nil ? min(1.0, (menuBarHeight! - 8) / 25) : 1.0, anchor: .center)
-                    .transition(.opacity)
             } else {
                 StaticVisualizer(color: .white)
                     .scaleEffect(y: menuBarHeight != nil ? min(1.0, (menuBarHeight! - 8) / 25) : 1.0, anchor: .center)
