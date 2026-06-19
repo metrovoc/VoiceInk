@@ -137,6 +137,111 @@ private final class RealtimeTranscriptionActivity {
     }
 }
 
+final class StreamingPartialEventCoalescer: @unchecked Sendable {
+    private let lock = NSLock()
+    private let interval: TimeInterval
+    private var pendingText: String?
+    private var lastEmitTime: TimeInterval = 0
+    private var scheduledTask: Task<Void, Never>?
+    private var generation: UInt64 = 0
+
+    init(interval: TimeInterval = 0.1) {
+        self.interval = interval
+    }
+
+    func submit(_ text: String, emit: @escaping @MainActor (String) -> Void) {
+        let now = ProcessInfo.processInfo.systemUptime
+
+        lock.lock()
+        let elapsed = now - lastEmitTime
+        if elapsed >= interval && scheduledTask == nil {
+            lastEmitTime = now
+            pendingText = nil
+            let currentGeneration = generation
+            lock.unlock()
+            Task { [weak self] in
+                guard let coalescer = self,
+                      coalescer.isCurrentGeneration(currentGeneration) else {
+                    return
+                }
+                await MainActor.run {
+                    guard coalescer.isCurrentGeneration(currentGeneration) else {
+                        return
+                    }
+                    emit(text)
+                }
+            }
+            return
+        }
+
+        pendingText = text
+        guard scheduledTask == nil else {
+            lock.unlock()
+            return
+        }
+
+        let currentGeneration = generation
+        let delay = UInt64(max(0, interval - elapsed) * 1_000_000_000)
+        scheduledTask = Task { [weak self] in
+            do {
+                try await Task.sleep(nanoseconds: delay)
+            } catch {
+                return
+            }
+
+            guard let self,
+                  let text = self.takePendingText(generation: currentGeneration) else {
+                return
+            }
+
+            guard self.isCurrentGeneration(currentGeneration) else {
+                return
+            }
+            await MainActor.run {
+                guard self.isCurrentGeneration(currentGeneration) else {
+                    return
+                }
+                emit(text)
+            }
+        }
+        lock.unlock()
+    }
+
+    func cancel() {
+        lock.lock()
+        generation &+= 1
+        pendingText = nil
+        scheduledTask?.cancel()
+        scheduledTask = nil
+        lastEmitTime = 0
+        lock.unlock()
+    }
+
+    private func takePendingText(generation expectedGeneration: UInt64) -> String? {
+        lock.lock()
+        defer { lock.unlock() }
+
+        guard generation == expectedGeneration else {
+            return nil
+        }
+
+        scheduledTask = nil
+        guard let text = pendingText else {
+            return nil
+        }
+
+        pendingText = nil
+        lastEmitTime = ProcessInfo.processInfo.systemUptime
+        return text
+    }
+
+    private func isCurrentGeneration(_ expectedGeneration: UInt64) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return generation == expectedGeneration
+    }
+}
+
 /// Lifecycle states for a streaming transcription session.
 enum StreamingState {
     case idle
@@ -184,18 +289,19 @@ class StreamingTranscriptionService: StreamingTranscriptionServicing {
     private let drainTimeoutNanoseconds: UInt64
     private let finalCommitTimeoutNanoseconds: UInt64
     private let disconnectTimeoutNanoseconds: UInt64
-    private var onPartialTranscript: ((String) -> Void)?
+    private var onPartialTranscript: (@MainActor (String) -> Void)?
     private let metrics = StreamingMetrics()
     private var stopStartedAt: Date?
     private var firstPartialLogged = false
     private var firstCommitLogged = false
     private let failureState = StreamingFailureState()
     private let realtimeActivity = RealtimeTranscriptionActivity()
+    private let partialEventCoalescer = StreamingPartialEventCoalescer()
 
     init(
         modelContext: ModelContext,
         fluidAudioService: FluidAudioTranscriptionService? = nil,
-        onPartialTranscript: ((String) -> Void)? = nil,
+        onPartialTranscript: (@MainActor (String) -> Void)? = nil,
         providerFactory: ProviderFactory? = nil,
         maxBufferedChunks: Int = 600,
         drainTimeoutNanoseconds: UInt64 = 3_000_000_000,
@@ -217,6 +323,7 @@ class StreamingTranscriptionService: StreamingTranscriptionServicing {
         sendTask?.cancel()
         sendLoopFinishedContinuation?.finish()
         eventConsumerTask?.cancel()
+        partialEventCoalescer.cancel()
         chunkSource.finish()
         commitSignal?.finish()
         realtimeActivity.end()
@@ -239,6 +346,7 @@ class StreamingTranscriptionService: StreamingTranscriptionServicing {
         state = .connecting
         committedSegments = []
         failureState.reset()
+        partialEventCoalescer.cancel()
         firstPartialLogged = false
         firstCommitLogged = false
 
@@ -358,6 +466,7 @@ class StreamingTranscriptionService: StreamingTranscriptionServicing {
     func cancel() {
         state = .cancelled
         onPartialTranscript = nil
+        partialEventCoalescer.cancel()
         eventConsumerTask?.cancel()
         eventConsumerTask = nil
         sendTask?.cancel()
@@ -506,6 +615,7 @@ class StreamingTranscriptionService: StreamingTranscriptionServicing {
         let events = provider.transcriptionEvents
         let source = chunkSource
         let failureState = failureState
+        let partialEventCoalescer = partialEventCoalescer
 
         eventConsumerTask = Task.detached(priority: .userInitiated) { [weak self, source, failureState] in
             for await event in events {
@@ -513,6 +623,7 @@ class StreamingTranscriptionService: StreamingTranscriptionServicing {
                 switch event {
                 case .committed(let text):
                     let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+                    partialEventCoalescer.cancel()
                     await MainActor.run {
                         if !self.firstCommitLogged {
                             self.firstCommitLogged = true
@@ -532,24 +643,8 @@ class StreamingTranscriptionService: StreamingTranscriptionServicing {
                         }
                     }
                 case .partial(let text):
-                    await MainActor.run {
-                        if !self.firstPartialLogged {
-                            self.firstPartialLogged = true
-                            self.logger.notice("Streaming first partial event chars=\(text.count, privacy: .public)")
-                        }
-                        if self.state == .streaming {
-                            let prefix = self.committedSegments.joined(separator: " ")
-                            let display: String
-                            if prefix.isEmpty {
-                                display = text
-                            } else if text.hasPrefix(prefix) || text.hasPrefix(prefix + " ") {
-                                // Provider already sends cumulative partials (e.g. FluidAudio fullText).
-                                display = text
-                            } else {
-                                display = prefix + " " + text
-                            }
-                            self.onPartialTranscript?(display)
-                        }
+                    partialEventCoalescer.submit(text) { [weak self] text in
+                        self?.handlePartialEvent(text)
                     }
                 case .sessionStarted:
                     break
@@ -568,6 +663,26 @@ class StreamingTranscriptionService: StreamingTranscriptionServicing {
                     }
                 }
             }  
+        }
+    }
+
+    private func handlePartialEvent(_ text: String) {
+        if !firstPartialLogged {
+            firstPartialLogged = true
+            logger.notice("Streaming first partial event chars=\(text.count, privacy: .public)")
+        }
+        if state == .streaming {
+            let prefix = committedSegments.joined(separator: " ")
+            let display: String
+            if prefix.isEmpty {
+                display = text
+            } else if text.hasPrefix(prefix) || text.hasPrefix(prefix + " ") {
+                // Provider already sends cumulative partials (e.g. FluidAudio fullText).
+                display = text
+            } else {
+                display = prefix + " " + text
+            }
+            onPartialTranscript?(display)
         }
     }
 
@@ -608,6 +723,7 @@ class StreamingTranscriptionService: StreamingTranscriptionServicing {
 
     private func cleanupStreaming() async {
         onPartialTranscript = nil
+        partialEventCoalescer.cancel()
         eventConsumerTask?.cancel()
         eventConsumerTask = nil
         sendTask?.cancel()

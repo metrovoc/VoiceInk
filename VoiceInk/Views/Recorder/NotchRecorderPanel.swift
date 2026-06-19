@@ -1,6 +1,31 @@
 import SwiftUI
 import AppKit
 
+struct NotchRecorderMetrics: Equatable {
+    let frame: NSRect
+    let notchWidth: CGFloat
+    let notchHeight: CGFloat
+}
+
+@MainActor
+final class NotchRecorderMetricsModel: ObservableObject {
+    @Published private(set) var notchWidth: CGFloat
+    @Published private(set) var notchHeight: CGFloat
+
+    init(metrics: NotchRecorderMetrics) {
+        self.notchWidth = metrics.notchWidth
+        self.notchHeight = metrics.notchHeight
+    }
+
+    func update(_ metrics: NotchRecorderMetrics) {
+        guard notchWidth != metrics.notchWidth || notchHeight != metrics.notchHeight else {
+            return
+        }
+        notchWidth = metrics.notchWidth
+        notchHeight = metrics.notchHeight
+    }
+}
+
 class KeyablePanel: NSPanel {
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { true }
@@ -9,12 +34,11 @@ class KeyablePanel: NSPanel {
 class NotchRecorderPanel: KeyablePanel {
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { true }
+    var onMetricsChanged: ((NotchRecorderMetrics) -> Void)?
 
     init(contentRect: NSRect) {
-        let metrics = NotchRecorderPanel.calculateWindowMetrics()
-
         super.init(
-            contentRect: metrics.frame,
+            contentRect: contentRect,
             styleMask: [.nonactivatingPanel, .fullSizeContentView, .hudWindow],
             backing: .buffered,
             defer: false
@@ -44,9 +68,13 @@ class NotchRecorderPanel: KeyablePanel {
         )
     }
 
-    static func calculateWindowMetrics() -> (frame: NSRect, notchWidth: CGFloat, notchHeight: CGFloat) {
+    static func calculateWindowMetrics() -> NotchRecorderMetrics {
         guard let screen = NSScreen.main else {
-            return (NSRect(x: 0, y: 0, width: 280, height: 24), 280, 24)
+            return NotchRecorderMetrics(
+                frame: NSRect(x: 0, y: 0, width: 280, height: 24),
+                notchWidth: 280,
+                notchHeight: 24
+            )
         }
 
         let safeAreaInsets = screen.safeAreaInsets
@@ -69,12 +97,13 @@ class NotchRecorderPanel: KeyablePanel {
         let yPosition = screen.frame.maxY - maxContentHeight
 
         let frame = NSRect(x: xPosition, y: yPosition, width: totalWidth, height: maxContentHeight)
-        return (frame, notchWidth, notchHeight)
+        return NotchRecorderMetrics(frame: frame, notchWidth: notchWidth, notchHeight: notchHeight)
     }
 
     func show() {
         let metrics = NotchRecorderPanel.calculateWindowMetrics()
         setFrame(metrics.frame, display: true)
+        onMetricsChanged?(metrics)
         orderFrontRegardless()
     }
 
@@ -83,6 +112,7 @@ class NotchRecorderPanel: KeyablePanel {
             guard let self else { return }
             let metrics = NotchRecorderPanel.calculateWindowMetrics()
             self.setFrame(metrics.frame, display: true)
+            self.onMetricsChanged?(metrics)
         }
     }
 

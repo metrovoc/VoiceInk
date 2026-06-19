@@ -54,28 +54,45 @@ struct VoiceInkApp: App {
         ])
         let resolvedContainer: ModelContainer
 
-        // Attempt 1: Try persistent storage
-        do {
-            resolvedContainer = try Self.createPersistentContainer(schema: schema, logger: logger)
-        } catch let persistentError {
-            // Attempt 2: Try in-memory storage
+        #if DEBUG
+        let forceInMemoryStore = ProcessInfo.processInfo.environment["VOICEINK_DEBUG_IN_MEMORY_STORE"] == "1"
+        #else
+        let forceInMemoryStore = false
+        #endif
+
+        if forceInMemoryStore {
+            ProcessInfo.processInfo.disableAutomaticTermination("VoiceInk debug measurement is running")
+
             do {
                 resolvedContainer = try Self.createInMemoryContainer(schema: schema, logger: logger)
-                logger.warning("Using in-memory storage as fallback. Data will not persist between sessions.")
-
-                DispatchQueue.main.async {
-                    let alert = NSAlert()
-                    alert.messageText = String(localized: "Storage Warning")
-                    alert.informativeText = String(localized: "VoiceInk CE couldn't access its storage location. Your transcriptions will not be saved between sessions.")
-                    alert.alertStyle = .warning
-                    alert.addButton(withTitle: String(localized: "OK"))
-                    alert.runModal()
-                }
+                logger.warning("Using in-memory storage because VOICEINK_DEBUG_IN_MEMORY_STORE=1.")
             } catch let memoryError {
-                let persistentDetail = Self.fullErrorDescription(persistentError)
                 let memoryDetail = Self.fullErrorDescription(memoryError)
-                logger.critical("❌ All ModelContainer init attempts failed.\nPersistent:\n\(persistentDetail, privacy: .public)\nIn-memory:\n\(memoryDetail, privacy: .public)")
-                fatalError("VoiceInk CE failed to initialize storage.\nPersistent:\n\(persistentDetail)\nIn-memory:\n\(memoryDetail)")
+                logger.critical("❌ Debug in-memory ModelContainer init failed.\n\(memoryDetail, privacy: .public)")
+                fatalError("VoiceInk CE failed to initialize debug in-memory storage.\n\(memoryDetail)")
+            }
+        } else {
+            do {
+                resolvedContainer = try Self.createPersistentContainer(schema: schema, logger: logger)
+            } catch let persistentError {
+                do {
+                    resolvedContainer = try Self.createInMemoryContainer(schema: schema, logger: logger)
+                    logger.warning("Using in-memory storage as fallback. Data will not persist between sessions.")
+
+                    DispatchQueue.main.async {
+                        let alert = NSAlert()
+                        alert.messageText = String(localized: "Storage Warning")
+                        alert.informativeText = String(localized: "VoiceInk CE couldn't access its storage location. Your transcriptions will not be saved between sessions.")
+                        alert.alertStyle = .warning
+                        alert.addButton(withTitle: String(localized: "OK"))
+                        alert.runModal()
+                    }
+                } catch let memoryError {
+                    let persistentDetail = Self.fullErrorDescription(persistentError)
+                    let memoryDetail = Self.fullErrorDescription(memoryError)
+                    logger.critical("❌ All ModelContainer init attempts failed.\nPersistent:\n\(persistentDetail, privacy: .public)\nIn-memory:\n\(memoryDetail, privacy: .public)")
+                    fatalError("VoiceInk CE failed to initialize storage.\nPersistent:\n\(persistentDetail)\nIn-memory:\n\(memoryDetail)")
+                }
             }
         }
 

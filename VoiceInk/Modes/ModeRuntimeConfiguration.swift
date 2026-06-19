@@ -5,19 +5,30 @@ struct TranscriptionRuntimeConfiguration {
     let model: any TranscriptionModel
     let language: String
     let isRealtimeEnabled: Bool
+    let requestContext: TranscriptionRequestContext
+
+    init(
+        mode: ModeConfig?,
+        model: any TranscriptionModel,
+        language: String,
+        isRealtimeEnabled: Bool,
+        requestContext: TranscriptionRequestContext? = nil
+    ) {
+        self.mode = mode
+        self.model = model
+        self.language = language
+        self.isRealtimeEnabled = isRealtimeEnabled
+        self.requestContext = requestContext ?? TranscriptionRequestContext(
+            language: language,
+            prompt: UserDefaults.standard.string(forKey: "TranscriptionPrompt")
+        )
+    }
 
     var metadata: (name: String?, emoji: String?) {
         guard let mode, mode.isEnabled else {
             return (nil, nil)
         }
         return (mode.name, mode.icon.value)
-    }
-
-    var requestContext: TranscriptionRequestContext {
-        TranscriptionRequestContext(
-            language: language,
-            prompt: UserDefaults.standard.string(forKey: "TranscriptionPrompt")
-        )
     }
 }
 
