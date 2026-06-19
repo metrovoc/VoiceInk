@@ -1,5 +1,6 @@
 import Foundation
 import AppKit
+import Combine
 
 @MainActor
 class RecordingShortcutManager: ObservableObject {
@@ -22,11 +23,13 @@ class RecordingShortcutManager: ObservableObject {
         didSet {
             UserDefaults.standard.set(primaryRecordingShortcutMode.rawValue, forKey: "primaryRecordingShortcutMode")
             primaryRecordingShortcutModeSource.primaryMode = primaryRecordingShortcutMode
+            fastStopState.updatePrimaryMode(primaryRecordingShortcutMode)
         }
     }
     @Published var secondaryRecordingShortcutMode: Mode {
         didSet {
             UserDefaults.standard.set(secondaryRecordingShortcutMode.rawValue, forKey: "secondaryRecordingShortcutMode")
+            fastStopState.updateSecondaryMode(secondaryRecordingShortcutMode)
         }
     }
     @Published var isMiddleClickToggleEnabled: Bool {
@@ -49,6 +52,8 @@ class RecordingShortcutManager: ObservableObject {
     private var shortcutChangeObserver: NSObjectProtocol?
     private let shortcutModeHandler: RecordingShortcutModeHandler
     private let primaryRecordingShortcutModeSource: RecordingShortcutModeSource
+    private let fastStopState: RecordingShortcutFastStopState
+    private var fastStopCancellables = Set<AnyCancellable>()
 
     // MARK: - Helper Properties
     private var canHandleShortcutAction: Bool {
@@ -104,10 +109,11 @@ class RecordingShortcutManager: ObservableObject {
         let primaryRecordingShortcutMode = ShortcutMigration.migrateShortcutMode(
             for: .primaryRecording
         )
-        self.primaryRecordingShortcutMode = primaryRecordingShortcutMode
-        self.secondaryRecordingShortcutMode = ShortcutMigration.migrateShortcutMode(
+        let secondaryRecordingShortcutMode = ShortcutMigration.migrateShortcutMode(
             for: .secondaryRecording
         )
+        self.primaryRecordingShortcutMode = primaryRecordingShortcutMode
+        self.secondaryRecordingShortcutMode = secondaryRecordingShortcutMode
 
         self.isMiddleClickToggleEnabled = UserDefaults.standard.bool(forKey: "isMiddleClickToggleEnabled")
         self.middleClickActivationDelay = UserDefaults.standard.integer(forKey: "middleClickActivationDelay")
@@ -133,18 +139,37 @@ class RecordingShortcutManager: ObservableObject {
         let primaryRecordingShortcutModeSource = RecordingShortcutModeSource(
             primaryMode: primaryRecordingShortcutMode
         )
+        let fastStopState = RecordingShortcutFastStopState(
+            primaryMode: primaryRecordingShortcutMode,
+            secondaryMode: secondaryRecordingShortcutMode
+        )
 
         self.engine = engine
         self.recorderUIManager = recorderUIManager
         self.recorderPanelShortcutManager = RecorderPanelShortcutManager(recorderUIManager: recorderUIManager)
         self.shortcutModeHandler = shortcutModeHandler
         self.primaryRecordingShortcutModeSource = primaryRecordingShortcutModeSource
+        self.fastStopState = fastStopState
         self.modeShortcutManager = ModeShortcutManager(
             modeProvider: {
                 primaryRecordingShortcutModeSource.primaryMode
             },
             shortcutModeHandler: shortcutModeHandler
         )
+        fastStopState.updateRecordingState(engine.recordingState)
+        fastStopState.updateRecorderVisible(recorderUIManager.isRecorderPanelVisible)
+
+        engine.$recordingState
+            .sink { [fastStopState] state in
+                fastStopState.updateRecordingState(state)
+            }
+            .store(in: &fastStopCancellables)
+
+        recorderUIManager.$isRecorderPanelVisible
+            .sink { [fastStopState] isVisible in
+                fastStopState.updateRecorderVisible(isVisible)
+            }
+            .store(in: &fastStopCancellables)
 
         shortcutChangeObserver = NotificationCenter.default.addObserver(
             forName: ShortcutStore.shortcutDidChange,
@@ -219,6 +244,8 @@ class RecordingShortcutManager: ObservableObject {
             interruptibleRecordingActions.insert(.secondaryRecording)
         }
 
+        let hardwareStopper = engine.recorder.makeHardwareStopper()
+        let fastStopState = fastStopState
         shortcutMonitor.start(
             shortcuts: shortcuts,
             interruptibleActions: interruptibleRecordingActions,
@@ -246,6 +273,19 @@ class RecordingShortcutManager: ObservableObject {
                         await self.handleGlobalShortcut(action)
                     }
                 }
+            },
+            onEventTapKeyDown: { action, _ in
+                guard fastStopState.shouldRequestStopOnKeyDown(action: action) else { return }
+                hardwareStopper.requestStopRecording()
+            },
+            onEventTapKeyUp: { action, _, pressDuration in
+                guard fastStopState.shouldRequestStopOnKeyUp(
+                    action: action,
+                    pressDuration: pressDuration
+                ) else {
+                    return
+                }
+                hardwareStopper.requestStopRecording()
             },
             onShortcutInterrupted: { [weak self] action, _ in
                 Task { @MainActor in
@@ -328,6 +368,112 @@ class RecordingShortcutManager: ObservableObject {
     }
 }
 
+final class RecordingShortcutFastStopState: @unchecked Sendable {
+    private struct Snapshot {
+        var recordingState: RecordingState = .idle
+        var isRecorderVisible = false
+        var primaryMode: RecordingShortcutManager.Mode
+        var secondaryMode: RecordingShortcutManager.Mode
+    }
+
+    private let lock = NSLock()
+    private var snapshot: Snapshot
+    private let hybridPressThreshold: TimeInterval
+
+    init(
+        primaryMode: RecordingShortcutManager.Mode,
+        secondaryMode: RecordingShortcutManager.Mode,
+        hybridPressThreshold: TimeInterval = 0.5
+    ) {
+        self.snapshot = Snapshot(primaryMode: primaryMode, secondaryMode: secondaryMode)
+        self.hybridPressThreshold = hybridPressThreshold
+    }
+
+    func updateRecordingState(_ recordingState: RecordingState) {
+        lock.lock()
+        snapshot.recordingState = recordingState
+        lock.unlock()
+    }
+
+    func updateRecorderVisible(_ isRecorderVisible: Bool) {
+        lock.lock()
+        snapshot.isRecorderVisible = isRecorderVisible
+        lock.unlock()
+    }
+
+    func updatePrimaryMode(_ mode: RecordingShortcutManager.Mode) {
+        lock.lock()
+        snapshot.primaryMode = mode
+        lock.unlock()
+    }
+
+    func updateSecondaryMode(_ mode: RecordingShortcutManager.Mode) {
+        lock.lock()
+        snapshot.secondaryMode = mode
+        lock.unlock()
+    }
+
+    func shouldRequestStopOnKeyDown(action: ShortcutAction) -> Bool {
+        let snapshot = currentSnapshot()
+        guard canRequestStop(action: action, snapshot: snapshot),
+              let mode = mode(for: action, snapshot: snapshot)
+        else {
+            return false
+        }
+
+        switch mode {
+        case .toggle, .hybrid:
+            return true
+        case .pushToTalk:
+            return false
+        }
+    }
+
+    func shouldRequestStopOnKeyUp(action: ShortcutAction, pressDuration: TimeInterval?) -> Bool {
+        let snapshot = currentSnapshot()
+        guard canRequestStop(action: action, snapshot: snapshot),
+              let mode = mode(for: action, snapshot: snapshot)
+        else {
+            return false
+        }
+
+        switch mode {
+        case .toggle:
+            return false
+        case .pushToTalk:
+            return true
+        case .hybrid:
+            return (pressDuration ?? 0) >= hybridPressThreshold
+        }
+    }
+
+    private func currentSnapshot() -> Snapshot {
+        lock.lock()
+        defer { lock.unlock() }
+        return snapshot
+    }
+
+    private func canRequestStop(action: ShortcutAction, snapshot: Snapshot) -> Bool {
+        guard mode(for: action, snapshot: snapshot) != nil else { return false }
+        guard snapshot.isRecorderVisible else { return false }
+        return [.starting, .recording].contains(snapshot.recordingState)
+    }
+
+    private func mode(
+        for action: ShortcutAction,
+        snapshot: Snapshot
+    ) -> RecordingShortcutManager.Mode? {
+        switch action {
+        case .primaryRecording:
+            return snapshot.primaryMode
+        case .secondaryRecording:
+            return snapshot.secondaryMode
+        default:
+            return nil
+        }
+    }
+}
+
 @MainActor
 private final class RecordingShortcutModeSource {
     var primaryMode: RecordingShortcutManager.Mode
@@ -351,6 +497,7 @@ final class RecordingShortcutModeHandler {
     private var activeRecordingShortcutAction: ShortcutAction?
     private var interruptedRecordingActions = Set<ShortcutAction>()
     private var activeShortcutCanCancelAccidentalStart = false
+    private var activeShortcutStoppedRecordingOnKeyDown = false
     private var lastShortcutPressTime: Date?
 
     private let shortcutPressCooldown: TimeInterval = 0.5
@@ -377,6 +524,7 @@ final class RecordingShortcutModeHandler {
         activeRecordingShortcutAction = nil
         interruptedRecordingActions.removeAll()
         activeShortcutCanCancelAccidentalStart = false
+        activeShortcutStoppedRecordingOnKeyDown = false
     }
 
     func handleKeyDown(
@@ -389,7 +537,12 @@ final class RecordingShortcutModeHandler {
             return
         }
 
-        if let lastTrigger = lastShortcutPressTime,
+        let isActiveStopKeyDown = isRecorderVisible()
+            && [.starting, .recording].contains(recordingState())
+            && (mode == .toggle || mode == .hybrid)
+
+        if !isActiveStopKeyDown,
+           let lastTrigger = lastShortcutPressTime,
            Date().timeIntervalSince(lastTrigger) < shortcutPressCooldown {
             return
         }
@@ -400,13 +553,15 @@ final class RecordingShortcutModeHandler {
         isShortcutPressed = true
         activeRecordingShortcutAction = action
         activeShortcutCanCancelAccidentalStart = canCurrentShortcutPressCancelAccidentalStart
+        activeShortcutStoppedRecordingOnKeyDown = false
         lastShortcutPressTime = Date()
         shortcutPressStartTime = eventTime
 
         switch mode {
         case .toggle, .hybrid:
-            if isHandsFreeRecording {
+            if isActiveStopKeyDown {
                 isHandsFreeRecording = false
+                activeShortcutStoppedRecordingOnKeyDown = true
                 guard canHandleShortcutAction() else { return }
                 await toggleRecorderPanel(modeId)
                 return
@@ -432,9 +587,15 @@ final class RecordingShortcutModeHandler {
         modeId: UUID? = nil
     ) async {
         guard isShortcutPressed, activeRecordingShortcutAction == action else { return }
+        let stoppedRecordingOnKeyDown = activeShortcutStoppedRecordingOnKeyDown
         isShortcutPressed = false
         activeRecordingShortcutAction = nil
         activeShortcutCanCancelAccidentalStart = false
+        activeShortcutStoppedRecordingOnKeyDown = false
+        if stoppedRecordingOnKeyDown {
+            shortcutPressStartTime = nil
+            return
+        }
 
         switch mode {
         case .toggle:

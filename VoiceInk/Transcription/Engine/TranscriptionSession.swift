@@ -54,7 +54,7 @@ final class FileTranscriptionSession: TranscriptionSession {
 
 // MARK: - Streaming Session
 
-/// Streaming session with automatic fallback to file-based upload on failure.
+/// Streaming session with file-based upload fallback for streaming transport failures.
 @MainActor
 final class StreamingTranscriptionSession: TranscriptionSession {
     private let streamingService: any StreamingTranscriptionServicing
@@ -143,8 +143,9 @@ final class StreamingTranscriptionSession: TranscriptionSession {
                 let start = Date()
                 logger.notice("Streaming stop/transcribe started model=\(model.displayName, privacy: .public)")
                 let text = try await streamingService.stopAndGetFinalText()
-                guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-                    throw StreamingTranscriptionError.emptyTranscript
+                if text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    logger.notice("Streaming completed with empty transcript elapsed=\(Date().timeIntervalSince(start), format: .fixed(precision: 3), privacy: .public)s")
+                    return ""
                 }
                 logger.notice("Streaming transcript received elapsed=\(Date().timeIntervalSince(start), format: .fixed(precision: 3), privacy: .public)s chars=\(text.count, privacy: .public)")
                 return text

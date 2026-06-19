@@ -23,7 +23,20 @@ class AudioDeviceManager: ObservableObject {
     @Published var inputMode: AudioInputMode = .custom
     @Published var prioritizedDevices: [PrioritizedDevice] = []
 
-    var isRecordingActive: Bool = false
+    private let recordingActivityLock = NSLock()
+    private var _isRecordingActive = false
+    var isRecordingActive: Bool {
+        get {
+            recordingActivityLock.lock()
+            defer { recordingActivityLock.unlock() }
+            return _isRecordingActive
+        }
+        set {
+            recordingActivityLock.lock()
+            _isRecordingActive = newValue
+            recordingActivityLock.unlock()
+        }
+    }
 
     static let shared = AudioDeviceManager()
 
