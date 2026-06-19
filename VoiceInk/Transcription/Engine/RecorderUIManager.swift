@@ -1,6 +1,9 @@
 import Foundation
 import SwiftUI
 import os
+#if DEBUG
+import Darwin
+#endif
 
 enum RecorderPanelStyle: String, CaseIterable, Identifiable {
     case notch
@@ -67,6 +70,9 @@ class RecorderUIManager: ObservableObject, RecorderPanelPresenting {
     private var recorder: Recorder?
 
     private let logger = Logger(subsystem: "com.metrovoc.voiceink", category: "RecorderUIManager")
+    #if DEBUG
+    private var debugToggleSignalSource: DispatchSourceSignal?
+    #endif
 
     init() {}
 
@@ -266,7 +272,30 @@ class RecorderUIManager: ObservableObject, RecorderPanelPresenting {
             name: .dismissRecorderPanel,
             object: nil
         )
+
+        #if DEBUG
+        setupDebugSignalHandler()
+        #endif
     }
+
+    #if DEBUG
+    private func setupDebugSignalHandler() {
+        guard debugToggleSignalSource == nil else { return }
+        signal(SIGUSR1, SIG_IGN)
+
+        let source = DispatchSource.makeSignalSource(signal: SIGUSR1, queue: .main)
+        source.setEventHandler { [weak self] in
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                self.logger.notice("Debug recording toggle signal received")
+                await self.toggleRecorderPanel()
+            }
+        }
+        source.resume()
+        debugToggleSignalSource = source
+        logger.notice("Registered debug recording toggle signal handler signal=SIGUSR1")
+    }
+    #endif
 
     @objc public func handleToggleRecorderPanelNotification() {
         Task {

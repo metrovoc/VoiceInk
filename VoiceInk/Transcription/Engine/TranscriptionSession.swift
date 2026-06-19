@@ -7,6 +7,9 @@ protocol TranscriptionSession: AnyObject {
     /// Prepares the session. Returns an audio chunk callback for streaming, or nil for file-based.
     func prepare(configuration: TranscriptionRuntimeConfiguration) async throws -> ((Data) -> Void)?
 
+    /// Whether a prepared session can still be reused by the active recording.
+    func canReusePreparedSession() -> Bool
+
     /// Called after recording stops. Returns the final transcribed text.
     func transcribe(audioURL: URL) async throws -> String
 
@@ -31,6 +34,10 @@ final class FileTranscriptionSession: TranscriptionSession {
         self.model = configuration.model
         self.context = configuration.requestContext
         return nil
+    }
+
+    func canReusePreparedSession() -> Bool {
+        true
     }
 
     func transcribe(audioURL: URL) async throws -> String {
@@ -119,6 +126,10 @@ final class StreamingTranscriptionSession: TranscriptionSession {
 
         logger.notice("Streaming session audio callback ready before connection model=\(model.displayName, privacy: .public)")
         return callback
+    }
+
+    func canReusePreparedSession() -> Bool {
+        !streamingFailed && !isCancelled
     }
 
     func transcribe(audioURL: URL) async throws -> String {

@@ -27,6 +27,13 @@ class Recorder: NSObject, ObservableObject {
     private let smoothedValuesLock = NSLock()
     private var smoothedAverage: Float = 0
     private var smoothedPeak: Float = 0
+    private let audioMeterPublishLock = NSLock()
+    private var lastAudioMeterPublishTime: TimeInterval = 0
+    private var lastPublishedAudioAverage: Double = 0
+    private var lastPublishedAudioPeak: Double = 0
+    private var audioMeterPublishGeneration: UInt64 = 0
+    private let audioMeterPublishInterval: TimeInterval = 1.0 / 30.0
+    private let audioMeterPublishDelta: Double = 0.015
 
     /// Audio chunk callback for streaming. Can be updated while recording;
     /// changes are forwarded to the live CoreAudioRecorder.
@@ -154,6 +161,14 @@ class Recorder: NSObject, ObservableObject {
     }
 
     func startRecording(toOutputFile url: URL) async throws {
+        #if DEBUG
+        let startTime = ProcessInfo.processInfo.systemUptime
+
+        func elapsed() -> Double {
+            ProcessInfo.processInfo.systemUptime - startTime
+        }
+        #endif
+
         cancelPendingWarmUp()
         deviceManager.isRecordingActive = true
 
@@ -178,9 +193,35 @@ class Recorder: NSObject, ObservableObject {
         let coreAudioRecorder = recorder ?? CoreAudioRecorder()
         coreAudioRecorder.onAudioChunk = onAudioChunk
         recorder = coreAudioRecorder
+        #if DEBUG
+        logger.debug("Recording start preflight completed deviceID=\(deviceID, privacy: .public) elapsed=\(elapsed(), format: .fixed(precision: 3), privacy: .public)s")
+        #endif
 
         do {
             // Offload hardware start to avoid shortcut lag.
+            #if DEBUG
+            let logger = logger
+            let queueFinishedAt = try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Double, Error>) in
+                let enqueuedAt = ProcessInfo.processInfo.systemUptime
+                audioSetupQueue.async {
+                    let queueStartedAt = ProcessInfo.processInfo.systemUptime
+                    logger.debug("Recording start audio queue began wait=\(queueStartedAt - enqueuedAt, format: .fixed(precision: 3), privacy: .public)s total=\(queueStartedAt - startTime, format: .fixed(precision: 3), privacy: .public)s")
+                    do {
+                        try coreAudioRecorder.startRecording(toOutputFile: url, deviceID: deviceID)
+                        let finishedAt = ProcessInfo.processInfo.systemUptime
+                        logger.debug("Recording start audio queue finished duration=\(finishedAt - queueStartedAt, format: .fixed(precision: 3), privacy: .public)s total=\(finishedAt - startTime, format: .fixed(precision: 3), privacy: .public)s")
+                        continuation.resume(returning: finishedAt)
+                    } catch {
+                        let finishedAt = ProcessInfo.processInfo.systemUptime
+                        logger.error("Recording start audio queue failed duration=\(finishedAt - queueStartedAt, format: .fixed(precision: 3), privacy: .public)s total=\(finishedAt - startTime, format: .fixed(precision: 3), privacy: .public)s error=\(error, privacy: .public)")
+                        continuation.resume(throwing: error)
+                    }
+                }
+            }
+
+            let resumedAt = ProcessInfo.processInfo.systemUptime
+            logger.debug("Recording start resumed on main resumeDelay=\(resumedAt - queueFinishedAt, format: .fixed(precision: 3), privacy: .public)s total=\(resumedAt - startTime, format: .fixed(precision: 3), privacy: .public)s")
+            #else
             try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
                 audioSetupQueue.async {
                     do {
@@ -191,7 +232,7 @@ class Recorder: NSObject, ObservableObject {
                     }
                 }
             }
-
+            #endif
             startAudioMeterTimer()
             logger.notice("Recording hardware started deviceID=\(deviceID, privacy: .public)")
             Task { [weak self] in
@@ -228,6 +269,7 @@ class Recorder: NSObject, ObservableObject {
         smoothedValuesLock.unlock()
 
         audioMeter = AudioMeter(averagePower: 0, peakPower: 0)
+        _ = resetAudioMeterPublishingState()
 
         audioRestorationTask = Task {
             await mediaController.unmuteSystemAudio()
@@ -253,10 +295,11 @@ class Recorder: NSObject, ObservableObject {
     }
 
     private func startAudioMeterTimer() {
+        let generation = resetAudioMeterPublishingState()
         let timer = DispatchSource.makeTimerSource(queue: audioMeterQueue)
-        timer.schedule(deadline: .now(), repeating: .milliseconds(17)) 
+        timer.schedule(deadline: .now(), repeating: .milliseconds(33))
         timer.setEventHandler { [weak self] in
-            self?.updateAudioMeter()
+            self?.updateAudioMeter(generation: generation)
         }
         timer.resume()
         audioMeterUpdateTimer = timer
@@ -313,7 +356,7 @@ class Recorder: NSObject, ObservableObject {
         audioSetupQueue.async(execute: item)
     }
 
-    private func updateAudioMeter() {
+    private func updateAudioMeter(generation: UInt64) {
         guard let recorder = recorder else { return }
 
         // Sample audio levels (thread-safe read)
@@ -349,11 +392,51 @@ class Recorder: NSObject, ObservableObject {
         let newAudioMeter = AudioMeter(averagePower: Double(smoothedAverage), peakPower: Double(smoothedPeak))
         smoothedValuesLock.unlock()
 
+        let now = ProcessInfo.processInfo.systemUptime
+        audioMeterPublishLock.lock()
+        guard generation == audioMeterPublishGeneration else {
+            audioMeterPublishLock.unlock()
+            return
+        }
+        let averageDelta = abs(newAudioMeter.averagePower - lastPublishedAudioAverage)
+        let peakDelta = abs(newAudioMeter.peakPower - lastPublishedAudioPeak)
+        let shouldPublish = now - lastAudioMeterPublishTime >= audioMeterPublishInterval
+            && (averageDelta >= audioMeterPublishDelta || peakDelta >= audioMeterPublishDelta)
+        if shouldPublish {
+            lastAudioMeterPublishTime = now
+            lastPublishedAudioAverage = newAudioMeter.averagePower
+            lastPublishedAudioPeak = newAudioMeter.peakPower
+        }
+        audioMeterPublishLock.unlock()
+
+        guard shouldPublish else { return }
+
         // Dispatch to main queue for UI updates (more efficient than Task)
         DispatchQueue.main.async { [weak self] in
-            guard let self = self else { return }
+            guard let self = self,
+                  self.isCurrentAudioMeterGeneration(generation) else {
+                return
+            }
             self.audioMeter = newAudioMeter
         }
+    }
+
+    private func resetAudioMeterPublishingState() -> UInt64 {
+        audioMeterPublishLock.lock()
+        audioMeterPublishGeneration &+= 1
+        lastAudioMeterPublishTime = 0
+        lastPublishedAudioAverage = 0
+        lastPublishedAudioPeak = 0
+        let generation = audioMeterPublishGeneration
+        audioMeterPublishLock.unlock()
+        return generation
+    }
+
+    private func isCurrentAudioMeterGeneration(_ generation: UInt64) -> Bool {
+        audioMeterPublishLock.lock()
+        let isCurrent = generation == audioMeterPublishGeneration
+        audioMeterPublishLock.unlock()
+        return isCurrent
     }
     
     // MARK: - Cleanup

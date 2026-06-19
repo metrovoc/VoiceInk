@@ -5,8 +5,9 @@ import AppKit
 class NotchWindowManager {
     private var windowController: NSWindowController?
     private var panel: NotchRecorderPanel?
+    private var metricsModel: NotchRecorderMetricsModel?
 
-    private let makeView: () -> AnyView
+    private let makeView: (NotchRecorderMetricsModel) -> AnyView
 
     init(
         engine: VoiceInkEngine,
@@ -16,12 +17,13 @@ class NotchWindowManager {
         onCloseTapped: @escaping () -> Void,
         onAssistantFollowUp: @escaping (String) -> Void
     ) {
-        self.makeView = {
+        self.makeView = { metricsModel in
             AnyView(
                 NotchRecorderView(
                     stateProvider: engine,
                     recorder: recorder,
                     assistantSession: assistantSession,
+                    metrics: metricsModel,
                     onRecordButtonTapped: onRecordButtonTapped,
                     onCloseTapped: onCloseTapped,
                     onAssistantFollowUp: onAssistantFollowUp
@@ -50,10 +52,15 @@ class NotchWindowManager {
     private func initializeWindow() {
         deinitializeWindow()
         let metrics = NotchRecorderPanel.calculateWindowMetrics()
+        let newMetricsModel = NotchRecorderMetricsModel(metrics: metrics)
         let newPanel = NotchRecorderPanel(contentRect: metrics.frame)
-        let view = makeView()
+        newPanel.onMetricsChanged = { [weak newMetricsModel] metrics in
+            newMetricsModel?.update(metrics)
+        }
+        let view = makeView(newMetricsModel)
         let hostingController = NotchRecorderHostingController(rootView: view)
         newPanel.contentView = hostingController.view
+        metricsModel = newMetricsModel
         panel = newPanel
         windowController = NSWindowController(window: newPanel)
     }
@@ -63,6 +70,7 @@ class NotchWindowManager {
         windowController?.close()
         windowController = nil
         panel = nil
+        metricsModel = nil
     }
 
 }

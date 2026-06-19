@@ -66,6 +66,29 @@ struct RecordingLifecycleRegressionTests {
         )
     }
 
+    @Test func recordingControlPlaneStopPolicyDefersPipelineUntilSessionIsReady() {
+        let activeStartID = UUID()
+
+        #expect(
+            RecordingControlPlaneStopPolicy.action(
+                activeRecordingStartID: activeStartID,
+                isControlPlaneReady: false
+            ) == .stopRecorderAndWaitForControlPlane
+        )
+        #expect(
+            RecordingControlPlaneStopPolicy.action(
+                activeRecordingStartID: activeStartID,
+                isControlPlaneReady: true
+            ) == .finishImmediately
+        )
+        #expect(
+            RecordingControlPlaneStopPolicy.action(
+                activeRecordingStartID: nil,
+                isControlPlaneReady: false
+            ) == .finishImmediately
+        )
+    }
+
     @MainActor
     @Test func streamingServiceDrainsBufferedAudioBeforeCommit() async throws {
         let provider = FakeStreamingProvider(commitEvent: .committed(text: "final text"))
@@ -275,6 +298,43 @@ struct RecordingLifecycleRegressionTests {
     }
 
     @MainActor
+    @Test func streamingSessionStopsReusingPreparedSessionAfterStartFailure() async throws {
+        let provider = FakeStreamingProvider(
+            commitEvent: .committed(text: "streaming transcript"),
+            connectError: StreamingTranscriptionError.connectionFailed("connect failed")
+        )
+        let streamingService = try StreamingTranscriptionService(
+            modelContext: makeModelContext(),
+            providerFactory: { _, _, _ in provider },
+            finalCommitTimeoutNanoseconds: 200_000_000
+        )
+        let fallbackService = FakeBatchTranscriptionService(result: "batch transcript")
+        let streamingModel = makeCloudModel(name: "deepgram-live", provider: .deepgram)
+        let session = StreamingTranscriptionSession(
+            streamingService: streamingService,
+            fallbackService: fallbackService
+        )
+
+        let preparedCallback = try await session.prepare(
+            configuration: TranscriptionRuntimeConfiguration(
+                mode: nil,
+                model: streamingModel,
+                language: "en",
+                isRealtimeEnabled: true
+            )
+        )
+        let callback = try #require(preparedCallback)
+        callback(Data([0x01]))
+
+        let text = try await session.transcribe(audioURL: URL(fileURLWithPath: "/tmp/voiceink-test.wav"))
+
+        #expect(text == "batch transcript")
+        #expect(!session.canReusePreparedSession())
+        #expect(provider.disconnectCallCount == 1)
+        #expect(fallbackService.transcribeCallCount == 1)
+    }
+
+    @MainActor
     @Test func streamingSessionFallsBackAndCancelsWhenStreamingStartTimesOut() async throws {
         let streamingService = DelayedStartStreamingService()
         let fallbackService = FakeBatchTranscriptionService(result: "batch transcript")
@@ -367,6 +427,48 @@ struct RecordingLifecycleRegressionTests {
     }
 
     @MainActor
+    @Test func streamingServiceCancelsPendingPartialWhenCommitArrives() async throws {
+        let provider = FakeStreamingProvider(commitEvent: .committed(text: "hello world"))
+        var partials: [String] = []
+        let service = try StreamingTranscriptionService(
+            modelContext: makeModelContext(),
+            onPartialTranscript: { partial in
+                partials.append(partial)
+            },
+            providerFactory: { _, _, _ in provider },
+            finalCommitTimeoutNanoseconds: 200_000_000
+        )
+
+        try await service.startStreaming(
+            model: makeCloudModel(name: "deepgram-live", provider: .deepgram),
+            context: TranscriptionRequestContext(language: "en", prompt: nil)
+        )
+
+        provider.emit(.partial(text: "hello"))
+        try await Task.sleep(nanoseconds: 10_000_000)
+        provider.emit(.partial(text: "hello wor"))
+        provider.emit(.committed(text: "hello world"))
+        try await Task.sleep(nanoseconds: 150_000_000)
+
+        #expect(partials.contains("hello world"))
+        #expect(!partials.contains("hello world hello wor"))
+    }
+
+    @MainActor
+    @Test func partialCoalescerCancelsImmediatePartialBeforeMainActorDelivery() async {
+        let coalescer = StreamingPartialEventCoalescer(interval: 0.1)
+        var partials: [String] = []
+
+        coalescer.submit("stale partial") { partial in
+            partials.append(partial)
+        }
+        coalescer.cancel()
+        await Task.yield()
+
+        #expect(partials.isEmpty)
+    }
+
+    @MainActor
     @Test func streamingSessionFallsBackToBatchWhenStreamingReturnsEmptyText() async throws {
         let streamingService = FakeStreamingService(stopResult: .success("  \n"))
         let fallbackService = FakeBatchTranscriptionService(result: "batch transcript")
@@ -425,6 +527,38 @@ struct RecordingLifecycleRegressionTests {
         #expect(fallbackService.transcribeCallCount == 1)
         #expect(fallbackService.modelNames == ["deepgram-live"])
     }
+
+    @Test func transcriptionRuntimeConfigurationSnapshotsRequestContext() {
+        let defaults = UserDefaults.standard
+        let key = "TranscriptionPrompt"
+        let originalPrompt = defaults.string(forKey: key)
+        defer {
+            if let originalPrompt {
+                defaults.set(originalPrompt, forKey: key)
+            } else {
+                defaults.removeObject(forKey: key)
+            }
+        }
+
+        defaults.set("old prompt", forKey: key)
+        let oldConfiguration = TranscriptionRuntimeConfiguration(
+            mode: nil,
+            model: makeCloudModel(name: "deepgram-live", provider: .deepgram),
+            language: "en",
+            isRealtimeEnabled: true
+        )
+
+        defaults.set("new prompt", forKey: key)
+        let newConfiguration = TranscriptionRuntimeConfiguration(
+            mode: nil,
+            model: makeCloudModel(name: "deepgram-live", provider: .deepgram),
+            language: "en",
+            isRealtimeEnabled: true
+        )
+
+        #expect(oldConfiguration.requestContext.prompt == "old prompt")
+        #expect(newConfiguration.requestContext.prompt == "new prompt")
+    }
 }
 
 @MainActor
@@ -457,6 +591,7 @@ private final class FakeStreamingProvider: StreamingTranscriptionProvider, @unch
     private var _disconnectCallCount = 0
     private let commitEvents: [StreamingTranscriptionEvent]
     private let sendError: Error?
+    private let connectError: Error?
     private let connectDelayNanoseconds: UInt64
     private let disconnectDelayNanoseconds: UInt64
     private let eventContinuation: AsyncStream<StreamingTranscriptionEvent>.Continuation
@@ -465,11 +600,13 @@ private final class FakeStreamingProvider: StreamingTranscriptionProvider, @unch
     init(
         commitEvent: StreamingTranscriptionEvent?,
         sendError: Error? = nil,
+        connectError: Error? = nil,
         connectDelayNanoseconds: UInt64 = 0,
         disconnectDelayNanoseconds: UInt64 = 0
     ) {
         self.commitEvents = commitEvent.map { [$0] } ?? []
         self.sendError = sendError
+        self.connectError = connectError
         self.connectDelayNanoseconds = connectDelayNanoseconds
         self.disconnectDelayNanoseconds = disconnectDelayNanoseconds
         let (stream, continuation) = AsyncStream.makeStream(of: StreamingTranscriptionEvent.self)
@@ -480,11 +617,13 @@ private final class FakeStreamingProvider: StreamingTranscriptionProvider, @unch
     init(
         commitEvents: [StreamingTranscriptionEvent],
         sendError: Error? = nil,
+        connectError: Error? = nil,
         connectDelayNanoseconds: UInt64 = 0,
         disconnectDelayNanoseconds: UInt64 = 0
     ) {
         self.commitEvents = commitEvents
         self.sendError = sendError
+        self.connectError = connectError
         self.connectDelayNanoseconds = connectDelayNanoseconds
         self.disconnectDelayNanoseconds = disconnectDelayNanoseconds
         let (stream, continuation) = AsyncStream.makeStream(of: StreamingTranscriptionEvent.self)
@@ -511,6 +650,9 @@ private final class FakeStreamingProvider: StreamingTranscriptionProvider, @unch
     func connect(model: any TranscriptionModel, language: String?) async throws {
         if connectDelayNanoseconds > 0 {
             try await Task.sleep(nanoseconds: connectDelayNanoseconds)
+        }
+        if let connectError {
+            throw connectError
         }
         eventContinuation.yield(.sessionStarted)
     }

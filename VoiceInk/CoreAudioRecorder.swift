@@ -128,18 +128,41 @@ final class CoreAudioRecorder: @unchecked Sendable {
 
     /// Starts recording from the specified device to the given URL (WAV format)
     func startRecording(toOutputFile url: URL, deviceID: AudioDeviceID) throws {
+        #if DEBUG
+        let startTime = ProcessInfo.processInfo.systemUptime
+        var lastStepTime = startTime
+
+        func mark(_ name: String) {
+            let now = ProcessInfo.processInfo.systemUptime
+            logger.debug("Recording core start step=\(name, privacy: .public) delta=\(now - lastStepTime, format: .fixed(precision: 3), privacy: .public)s total=\(now - startTime, format: .fixed(precision: 3), privacy: .public)s")
+            lastStepTime = now
+        }
+        #endif
+
         // Stop any existing recording
         stopRecording()
+        #if DEBUG
+        mark("stopRecording")
+        #endif
 
         try prepare(deviceID: deviceID)
+        #if DEBUG
+        mark("prepare")
+        #endif
 
         do {
             recordingURL = url
 
             // The output file is per recording; the AUHAL setup above is reused.
             try createOutputFile(at: url)
+            #if DEBUG
+            mark("createOutputFile")
+            #endif
 
             try startAudioUnit()
+            #if DEBUG
+            mark("startAudioUnit")
+            #endif
         } catch {
             isRecording = false
             closeOutputFile()

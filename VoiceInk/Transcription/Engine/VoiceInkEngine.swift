@@ -99,6 +99,19 @@ private final class StartupAudioChunkRelay: @unchecked Sendable {
     }
 }
 
+enum RecordingControlPlaneStopAction: Equatable {
+    case finishImmediately
+    case stopRecorderAndWaitForControlPlane
+}
+
+enum RecordingControlPlaneStopPolicy {
+    static func action(activeRecordingStartID: UUID?, isControlPlaneReady: Bool) -> RecordingControlPlaneStopAction {
+        activeRecordingStartID != nil && !isControlPlaneReady
+            ? .stopRecorderAndWaitForControlPlane
+            : .finishImmediately
+    }
+}
+
 @MainActor
 class VoiceInkEngine: NSObject, ObservableObject {
     private enum RecordingUseCase {
@@ -108,6 +121,12 @@ class VoiceInkEngine: NSObject, ObservableObject {
         var isAssistantFollowUp: Bool {
             self == .assistantFollowUp
         }
+    }
+
+    private struct PreparedRealtimeSession {
+        let configuration: TranscriptionRuntimeConfiguration
+        let session: TranscriptionSession
+        let audioChunkCallback: (Data) -> Void
     }
 
     @Published var recordingState: RecordingState = .idle
@@ -123,7 +142,13 @@ class VoiceInkEngine: NSObject, ObservableObject {
     private var activeRecordingContextStore: RecordingContextSnapshotStore?
     private var activeRecordingContextTasks: [Task<Void, Never>] = []
     private var isStartupAudioCaptureActive = false
+    private var isRecordingControlPlaneReady = false
     private var shouldStopAfterStartup = false
+    private var pendingPartialTranscript: String?
+    private var partialTranscriptUpdateTask: Task<Void, Never>?
+    private var lastPartialTranscriptUpdateTime: TimeInterval = 0
+    private let partialTranscriptPublishInterval: TimeInterval = 0.1
+    private let startupModeSettleBudgetNanoseconds: UInt64 = 120_000_000
 
     let recorder = Recorder()
     var recordedFile: URL? = nil
@@ -189,6 +214,120 @@ class VoiceInkEngine: NSObject, ObservableObject {
         }
     }
 
+    private func schedulePartialTranscriptUpdate(_ partial: String, for startID: UUID) {
+        pendingPartialTranscript = partial
+
+        let now = ProcessInfo.processInfo.systemUptime
+        let elapsed = now - lastPartialTranscriptUpdateTime
+        if elapsed >= partialTranscriptPublishInterval {
+            flushPendingPartialTranscript(for: startID)
+            return
+        }
+
+        guard partialTranscriptUpdateTask == nil else { return }
+
+        let delay = UInt64((partialTranscriptPublishInterval - elapsed) * 1_000_000_000)
+        partialTranscriptUpdateTask = Task { @MainActor [weak self] in
+            do {
+                try await Task.sleep(nanoseconds: delay)
+            } catch {
+                return
+            }
+            guard let self else { return }
+            self.partialTranscriptUpdateTask = nil
+            self.flushPendingPartialTranscript(for: startID)
+        }
+    }
+
+    private func flushPendingPartialTranscript(for startID: UUID) {
+        guard activeRecordingStartID == startID,
+              recordingState == .starting || recordingState == .recording,
+              let partial = pendingPartialTranscript else {
+            return
+        }
+
+        pendingPartialTranscript = nil
+        lastPartialTranscriptUpdateTime = ProcessInfo.processInfo.systemUptime
+        if partialTranscript != partial {
+            partialTranscript = partial
+        }
+    }
+
+    private func clearPartialTranscript() {
+        partialTranscriptUpdateTask?.cancel()
+        partialTranscriptUpdateTask = nil
+        pendingPartialTranscript = nil
+        lastPartialTranscriptUpdateTime = 0
+        if !partialTranscript.isEmpty {
+            partialTranscript = ""
+        }
+    }
+
+    private func makePartialTranscriptHandler(for startID: UUID) -> @MainActor (String) -> Void {
+        { [weak self] partial in
+            guard let self,
+                  self.activeRecordingStartID == startID,
+                  self.recordingState == .starting || self.recordingState == .recording else {
+                return
+            }
+            self.schedulePartialTranscriptUpdate(partial, for: startID)
+        }
+    }
+
+    private func prepareRealtimeSessionIfNeeded(
+        configuration: TranscriptionRuntimeConfiguration,
+        startID: UUID
+    ) async throws -> PreparedRealtimeSession? {
+        guard serviceRegistry.shouldUseRealtimeTranscription(for: configuration) else {
+            return nil
+        }
+
+        let session = serviceRegistry.createSession(
+            for: configuration,
+            onPartialTranscript: makePartialTranscriptHandler(for: startID)
+        )
+        guard let callback = try await session.prepare(configuration: configuration) else {
+            return nil
+        }
+
+        return PreparedRealtimeSession(
+            configuration: configuration,
+            session: session,
+            audioChunkCallback: callback
+        )
+    }
+
+    private func realtimeConfigurationMatches(
+        _ lhs: TranscriptionRuntimeConfiguration,
+        _ rhs: TranscriptionRuntimeConfiguration
+    ) -> Bool {
+        lhs.isRealtimeEnabled == rhs.isRealtimeEnabled &&
+            lhs.model.name == rhs.model.name &&
+            lhs.model.provider == rhs.model.provider &&
+            lhs.language == rhs.language &&
+            lhs.requestContext.prompt == rhs.requestContext.prompt
+    }
+
+    private func waitForStartupModeConfiguration(
+        _ task: Task<Void, Never>,
+        budgetNanoseconds: UInt64
+    ) async -> Bool {
+        await withTaskGroup(of: Bool.self) { group in
+            group.addTask {
+                await task.value
+                return true
+            }
+            group.addTask {
+                try? await Task.sleep(nanoseconds: budgetNanoseconds)
+                return false
+            }
+
+            let didSettle = await group.next() ?? false
+            group.cancelAll()
+            return didSettle
+        }
+    }
+
     func getEnhancementService() -> AIEnhancementService? {
         return enhancementService
     }
@@ -210,7 +349,18 @@ class VoiceInkEngine: NSObject, ObservableObject {
         }
 
         if recordingState == .recording {
-            await finishActiveRecording()
+            switch RecordingControlPlaneStopPolicy.action(
+                activeRecordingStartID: activeRecordingStartID,
+                isControlPlaneReady: isRecordingControlPlaneReady
+            ) {
+            case .stopRecorderAndWaitForControlPlane:
+                shouldStopAfterStartup = true
+                recordingState = .transcribing
+                logger.notice("Stopping recorder while recording control plane prepares")
+                await recorder.stopRecording()
+            case .finishImmediately:
+                await finishActiveRecording()
+            }
         } else {
             let canContinueAssistantSession = isAssistantFollowUp && assistantSession.canSendFollowUp
             let recordingUseCase: RecordingUseCase = canContinueAssistantSession ? .assistantFollowUp : .newSession
@@ -218,8 +368,9 @@ class VoiceInkEngine: NSObject, ObservableObject {
             activePipelineTranscriptionID = nil
             shouldCancelRecording = false
             isStartupAudioCaptureActive = false
+            isRecordingControlPlaneReady = false
             shouldStopAfterStartup = false
-            partialTranscript = ""
+            clearPartialTranscript()
             activeRecordingUseCase = recordingUseCase
             clearActiveRecordingContext()
 
@@ -237,12 +388,8 @@ class VoiceInkEngine: NSObject, ObservableObject {
                         let startID = UUID()
                         self.activeRecordingStartID = startID
                         self.logger.notice("Recording startup requested id=\(startID.uuidString, privacy: .public)")
-                        let activeModeTask = ActiveWindowService.shared.beginApplyingConfiguration(modeId: modeId) { [weak self] in
-                            guard let self else { return false }
-                            return self.activeRecordingStartID == startID && !self.shouldCancelRecording
-                        }
 
-                        var didStartAudioCapture = false
+                        var activeModeTask: Task<Void, Never>?
                         do {
                             let fileName = "\(UUID().uuidString).wav"
                             let permanentURL = self.recordingsDirectory.appendingPathComponent(fileName)
@@ -251,6 +398,13 @@ class VoiceInkEngine: NSObject, ObservableObject {
                             self.recorder.onAudioChunk = { data in
                                 startupAudioRelay.send(data)
                             }
+                            var preparedRealtimeSession: PreparedRealtimeSession?
+                            var didConsumePreparedRealtimeSession = false
+                            defer {
+                                if !didConsumePreparedRealtimeSession {
+                                    preparedRealtimeSession?.session.cancel()
+                                }
+                            }
 
                             self.recordingState = .starting
                             self.logger.notice("Recording startup state=starting elapsed=\(startupElapsed(), format: .fixed(precision: 3), privacy: .public)s")
@@ -258,7 +412,6 @@ class VoiceInkEngine: NSObject, ObservableObject {
                             guard self.activeRecordingStartID == startID,
                                   self.recorderUIManager?.isRecorderPanelVisible ?? false,
                                   !self.shouldCancelRecording else {
-                                activeModeTask.cancel()
                                 _ = startupAudioRelay.discard()
                                 self.recorder.onAudioChunk = nil
                                 if self.activeRecordingStartID == startID {
@@ -266,6 +419,7 @@ class VoiceInkEngine: NSObject, ObservableObject {
                                     self.recordingState = .idle
                                     self.activeRecordingStartID = nil
                                     self.isStartupAudioCaptureActive = false
+                                    self.isRecordingControlPlaneReady = false
                                     self.shouldStopAfterStartup = false
                                     self.clearActiveRecordingContext()
                                 }
@@ -274,7 +428,6 @@ class VoiceInkEngine: NSObject, ObservableObject {
 
                             self.recorder.scheduleSystemMute()
                             try await self.recorder.startRecording(toOutputFile: permanentURL)
-                            didStartAudioCapture = true
                             guard self.activeRecordingStartID == startID,
                                   self.recorderUIManager?.isRecorderPanelVisible ?? false,
                                   !self.shouldCancelRecording else {
@@ -289,6 +442,7 @@ class VoiceInkEngine: NSObject, ObservableObject {
                                     self.recordingState = .idle
                                     self.activeRecordingStartID = nil
                                     self.isStartupAudioCaptureActive = false
+                                    self.isRecordingControlPlaneReady = false
                                     self.shouldStopAfterStartup = false
                                     self.clearActiveRecordingContext()
                                     await self.cleanupResources()
@@ -298,8 +452,28 @@ class VoiceInkEngine: NSObject, ObservableObject {
                             self.isStartupAudioCaptureActive = true
                             self.logger.notice("Recording startup audio capture started elapsed=\(startupElapsed(), format: .fixed(precision: 3), privacy: .public)s")
                             self.startRecordingContextCapture()
-                            await activeModeTask.value
-                            self.logger.notice("Recording startup mode configuration settled elapsed=\(startupElapsed(), format: .fixed(precision: 3), privacy: .public)s")
+                            self.isStartupAudioCaptureActive = false
+                            self.recordingState = .recording
+                            self.logger.notice("Recording startup state=recording elapsed=\(startupElapsed(), format: .fixed(precision: 3), privacy: .public)s")
+
+                            let modeTask = ActiveWindowService.shared.beginApplyingConfiguration(modeId: modeId) { [weak self] in
+                                guard let self else { return false }
+                                return self.activeRecordingStartID == startID && !self.shouldCancelRecording
+                            }
+                            activeModeTask = modeTask
+
+                            if let initialConfiguration = ModeRuntimeResolver.transcriptionConfiguration(
+                                transcriptionModelManager: self.transcriptionModelManager
+                            ) {
+                                let preconnectStart = ProcessInfo.processInfo.systemUptime
+                                preparedRealtimeSession = try await self.prepareRealtimeSessionIfNeeded(
+                                    configuration: initialConfiguration,
+                                    startID: startID
+                                )
+                                if preparedRealtimeSession != nil {
+                                    self.logger.notice("Recording startup realtime preconnect started model=\(initialConfiguration.model.displayName, privacy: .public) elapsed=\(startupElapsed(), format: .fixed(precision: 3), privacy: .public)s duration=\(ProcessInfo.processInfo.systemUptime - preconnectStart, format: .fixed(precision: 3), privacy: .public)s")
+                                }
+                            }
 
                             guard self.activeRecordingStartID == startID,
                                   self.recorderUIManager?.isRecorderPanelVisible ?? false,
@@ -315,6 +489,39 @@ class VoiceInkEngine: NSObject, ObservableObject {
                                     self.recordingState = .idle
                                     self.activeRecordingStartID = nil
                                     self.isStartupAudioCaptureActive = false
+                                    self.isRecordingControlPlaneReady = false
+                                    self.shouldStopAfterStartup = false
+                                    self.clearActiveRecordingContext()
+                                    await self.cleanupResources()
+                                }
+                                return
+                            }
+
+                            let modeSettled = await self.waitForStartupModeConfiguration(
+                                modeTask,
+                                budgetNanoseconds: self.startupModeSettleBudgetNanoseconds
+                            )
+                            if modeSettled {
+                                self.logger.notice("Recording startup mode configuration settled elapsed=\(startupElapsed(), format: .fixed(precision: 3), privacy: .public)s")
+                            } else {
+                                self.logger.notice("Recording startup proceeding with current mode configuration while URL lookup continues elapsed=\(startupElapsed(), format: .fixed(precision: 3), privacy: .public)s")
+                            }
+
+                            guard self.activeRecordingStartID == startID,
+                                  self.recorderUIManager?.isRecorderPanelVisible ?? false,
+                                  !self.shouldCancelRecording else {
+                                _ = startupAudioRelay.discard()
+                                self.recorder.onAudioChunk = nil
+                                if self.shouldCancelRecording {
+                                    await self.finishActiveRecorderCancellation()
+                                } else if self.activeRecordingStartID == startID {
+                                    await self.recorder.stopRecording()
+                                    try? FileManager.default.removeItem(at: permanentURL)
+                                    self.recordedFile = nil
+                                    self.recordingState = .idle
+                                    self.activeRecordingStartID = nil
+                                    self.isStartupAudioCaptureActive = false
+                                    self.isRecordingControlPlaneReady = false
                                     self.shouldStopAfterStartup = false
                                     self.clearActiveRecordingContext()
                                     await self.cleanupResources()
@@ -334,6 +541,7 @@ class VoiceInkEngine: NSObject, ObservableObject {
                                 self.recordingState = .idle
                                 self.activeRecordingStartID = nil
                                 self.isStartupAudioCaptureActive = false
+                                self.isRecordingControlPlaneReady = false
                                 self.shouldStopAfterStartup = false
                                 self.clearActiveRecordingContext()
                                 await self.cleanupResources()
@@ -345,22 +553,31 @@ class VoiceInkEngine: NSObject, ObservableObject {
 
                             let audioChunkCallback: ((Data) -> Void)?
                             if self.serviceRegistry.shouldUseRealtimeTranscription(for: transcriptionConfiguration) {
-                                let session = self.serviceRegistry.createSession(
-                                    for: transcriptionConfiguration,
-                                    onPartialTranscript: { [weak self] partial in
-                                        Task { @MainActor in
-                                            guard let self,
-                                                  self.activeRecordingStartID == startID,
-                                                  self.recordingState == .recording else {
-                                                return
-                                            }
-                                            self.partialTranscript = partial
-                                        }
+                                if let preparedRealtimeSession,
+                                   self.realtimeConfigurationMatches(preparedRealtimeSession.configuration, transcriptionConfiguration),
+                                   preparedRealtimeSession.session.canReusePreparedSession() {
+                                    self.currentSession = preparedRealtimeSession.session
+                                    audioChunkCallback = preparedRealtimeSession.audioChunkCallback
+                                    didConsumePreparedRealtimeSession = true
+                                    self.logger.notice("Recording startup reused early realtime session elapsed=\(startupElapsed(), format: .fixed(precision: 3), privacy: .public)s")
+                                } else {
+                                    if let preparedRealtimeSession,
+                                       !self.realtimeConfigurationMatches(preparedRealtimeSession.configuration, transcriptionConfiguration) {
+                                        self.logger.notice("Recording startup discarded early realtime session because final configuration changed")
+                                    } else if preparedRealtimeSession != nil {
+                                        self.logger.notice("Recording startup discarded early realtime session because it was no longer reusable")
                                     }
-                                )
-                                self.currentSession = session
-                                audioChunkCallback = try await session.prepare(configuration: transcriptionConfiguration)
-                                self.logger.notice("Recording startup realtime callback ready elapsed=\(startupElapsed(), format: .fixed(precision: 3), privacy: .public)s")
+                                    preparedRealtimeSession?.session.cancel()
+                                    preparedRealtimeSession = nil
+
+                                    let session = self.serviceRegistry.createSession(
+                                        for: transcriptionConfiguration,
+                                        onPartialTranscript: self.makePartialTranscriptHandler(for: startID)
+                                    )
+                                    self.currentSession = session
+                                    audioChunkCallback = try await session.prepare(configuration: transcriptionConfiguration)
+                                    self.logger.notice("Recording startup realtime callback ready elapsed=\(startupElapsed(), format: .fixed(precision: 3), privacy: .public)s")
+                                }
                                 if let audioChunkCallback {
                                     let drainStats = startupAudioRelay.attach(audioChunkCallback)
                                     self.logger.notice("Recording startup drained pre-session audio chunks=\(drainStats.bufferedChunks, privacy: .public) bytes=\(drainStats.bufferedBytes, privacy: .public) droppedChunks=\(drainStats.droppedChunks, privacy: .public) droppedBytes=\(drainStats.droppedBytes, privacy: .public)")
@@ -386,7 +603,7 @@ class VoiceInkEngine: NSObject, ObservableObject {
                                 self.cancelCurrentSession()
                                 if self.shouldCancelRecording {
                                     await self.finishActiveRecorderCancellation()
-                                } else {
+                                } else if self.activeRecordingStartID == startID {
                                     await self.recorder.stopRecording()
                                     self.recorder.onAudioChunk = nil
                                     try? FileManager.default.removeItem(at: permanentURL)
@@ -394,6 +611,7 @@ class VoiceInkEngine: NSObject, ObservableObject {
                                     self.recordingState = .idle
                                     self.activeRecordingStartID = nil
                                     self.isStartupAudioCaptureActive = false
+                                    self.isRecordingControlPlaneReady = false
                                     self.shouldStopAfterStartup = false
                                     self.clearActiveRecordingContext()
                                     await self.cleanupResources()
@@ -401,7 +619,7 @@ class VoiceInkEngine: NSObject, ObservableObject {
                                 return
                             }
 
-                            self.isStartupAudioCaptureActive = false
+                            self.isRecordingControlPlaneReady = true
                             if self.shouldStopAfterStartup {
                                 self.shouldStopAfterStartup = false
                                 self.logger.notice("Recording startup completed with deferred stop elapsed=\(startupElapsed(), format: .fixed(precision: 3), privacy: .public)s")
@@ -409,8 +627,7 @@ class VoiceInkEngine: NSObject, ObservableObject {
                                 return
                             }
 
-                            self.recordingState = .recording
-                            self.logger.notice("Recording startup state=recording elapsed=\(startupElapsed(), format: .fixed(precision: 3), privacy: .public)s")
+                            self.logger.notice("Recording startup control plane ready elapsed=\(startupElapsed(), format: .fixed(precision: 3), privacy: .public)s")
 
                             Task { @MainActor [weak self] in
                                 guard let self else { return }
@@ -433,12 +650,12 @@ class VoiceInkEngine: NSObject, ObservableObject {
                             }
 
                         } catch {
-                            activeModeTask.cancel()
+                            activeModeTask?.cancel()
                             let isStaleStart = self.activeRecordingStartID != startID
                             let wasCancelled = error is CancellationError
                                 || self.shouldCancelRecording
                                 || isStaleStart
-                            if isStaleStart && !self.shouldCancelRecording && !didStartAudioCapture {
+                            if isStaleStart && !self.shouldCancelRecording {
                                 return
                             }
                             await self.recorder.stopRecording()
@@ -452,6 +669,7 @@ class VoiceInkEngine: NSObject, ObservableObject {
                                 self.recordedFile = nil
                                 self.activeRecordingStartID = nil
                                 self.isStartupAudioCaptureActive = false
+                                self.isRecordingControlPlaneReady = false
                                 self.shouldStopAfterStartup = false
                                 self.clearActiveRecordingContext()
                                 await self.cleanupResources()
@@ -627,8 +845,9 @@ class VoiceInkEngine: NSObject, ObservableObject {
         activeRecordingUseCase = .newSession
         activeRecordingStartID = nil
         isStartupAudioCaptureActive = false
+        isRecordingControlPlaneReady = false
         shouldStopAfterStartup = false
-        partialTranscript = ""
+        clearPartialTranscript()
         recordingState = .transcribing
         await recorder.stopRecording()
 
@@ -673,11 +892,11 @@ class VoiceInkEngine: NSObject, ObservableObject {
             shouldFinishSessionImmediately = true
         case .transcribing, .enhancing:
             requestRecordingCancellation()
-            partialTranscript = ""
+            clearPartialTranscript()
             recordingState = .idle
             shouldFinishSessionImmediately = false
         case .idle, .busy:
-            partialTranscript = ""
+            clearPartialTranscript()
             shouldCancelRecording = false
             recordingState = .idle
             shouldFinishSessionImmediately = true
@@ -695,8 +914,9 @@ class VoiceInkEngine: NSObject, ObservableObject {
         canceledPipelineTranscriptionIDs.removeAll()
         shouldCancelRecording = false
         isStartupAudioCaptureActive = false
+        isRecordingControlPlaneReady = false
         shouldStopAfterStartup = false
-        partialTranscript = ""
+        clearPartialTranscript()
         assistantSession.reset()
         activeRecordingUseCase = .newSession
         activePipelineUseCase = .newSession
@@ -722,13 +942,14 @@ class VoiceInkEngine: NSObject, ObservableObject {
     private func finishActiveRecorderCancellation() async {
         activeRecordingStartID = nil
         isStartupAudioCaptureActive = false
+        isRecordingControlPlaneReady = false
         shouldStopAfterStartup = false
         clearActiveRecordingContext()
         recorder.onAudioChunk = nil
         await recorder.stopRecording()
         await saveCanceledRecording()
         recordedFile = nil
-        partialTranscript = ""
+        clearPartialTranscript()
         recordingState = .idle
         await cleanupResources()
     }
@@ -817,6 +1038,7 @@ class VoiceInkEngine: NSObject, ObservableObject {
         activeRecordingStartID = nil
         activeRecordingUseCase = .newSession
         isStartupAudioCaptureActive = false
+        isRecordingControlPlaneReady = false
         shouldStopAfterStartup = false
         await whisperModelManager.cleanupResources()
         await serviceRegistry.cleanup()
