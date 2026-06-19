@@ -11,37 +11,45 @@ struct AudioVisualizer: View {
     private let minHeight: CGFloat = 4
     private let maxHeight: CGFloat = 28
 
-    private let phases: [Double]
+    private let barWeights: [CGFloat]
 
     init(audioMeter: AudioMeter, color: Color, isActive: Bool) {
         self.audioMeter = audioMeter
         self.color = color
         self.isActive = isActive
-        self.phases = (0..<barCount).map { Double($0) * 0.4 }
+        self.barWeights = Self.makeBarWeights(count: barCount)
     }
 
     var body: some View {
-        TimelineView(.animation(minimumInterval: 1.0 / 30.0)) { context in
-            HStack(spacing: barSpacing) {
-                ForEach(0..<barCount, id: \.self) { index in
-                    RoundedRectangle(cornerRadius: barWidth / 2)
-                        .fill(color.opacity(0.85))
-                        .frame(width: barWidth, height: barHeight(for: index, at: context.date))
-                }
+        HStack(spacing: barSpacing) {
+            ForEach(0..<barCount, id: \.self) { index in
+                RoundedRectangle(cornerRadius: barWidth / 2)
+                    .fill(color.opacity(0.85))
+                    .frame(width: barWidth, height: barHeight(for: index))
             }
         }
+        .animation(.easeOut(duration: 0.08), value: audioMeter.averagePower)
+        .animation(.easeOut(duration: 0.08), value: audioMeter.peakPower)
     }
 
-    private func barHeight(for index: Int, at date: Date) -> CGFloat {
+    private func barHeight(for index: Int) -> CGFloat {
         guard isActive else { return minHeight }
 
-        let time = date.timeIntervalSince1970
-        let amplitude = max(0, min(1, pow(audioMeter.averagePower, 0.7))) // boosted for visibility
-        let wave = sin(time * 8 + phases[index]) * 0.5 + 0.5
-        let centerDistance = abs(Double(index) - Double(barCount) / 2) / Double(barCount / 2)
-        let centerBoost = 1.0 - (centerDistance * 0.4)
+        let average = max(0, min(1, audioMeter.averagePower))
+        let peak = max(0, min(1, audioMeter.peakPower))
+        let amplitude = CGFloat(pow(max(average, peak * 0.72), 0.7))
 
-        return max(minHeight, minHeight + CGFloat(amplitude * wave * centerBoost) * (maxHeight - minHeight))
+        return minHeight + amplitude * barWeights[index] * (maxHeight - minHeight)
+    }
+
+    private static func makeBarWeights(count: Int) -> [CGFloat] {
+        (0..<count).map { index in
+            let center = CGFloat(count - 1) / 2
+            let normalizedDistance = abs(CGFloat(index) - center) / max(center, 1)
+            let centerBoost = 1.0 - normalizedDistance * 0.42
+            let contour = 0.78 + 0.22 * sin(CGFloat(index) * 1.7)
+            return max(0.35, centerBoost * contour)
+        }
     }
 }
 

@@ -139,6 +139,11 @@ class VoiceInkEngine: NSObject, ObservableObject {
         let audioChunkCallback: (Data) -> Void
     }
 
+    private struct EarlyRealtimePreconnect {
+        let configuration: TranscriptionRuntimeConfiguration
+        let task: Task<PreparedRealtimeSession?, Error>
+    }
+
     @Published var recordingState: RecordingState = .idle
     @Published var shouldCancelRecording = false
     @Published var partialTranscript: String = ""
@@ -308,6 +313,72 @@ class VoiceInkEngine: NSObject, ObservableObject {
         )
     }
 
+    private func beginRealtimePreconnectIfNeeded(
+        configuration: TranscriptionRuntimeConfiguration,
+        startID: UUID,
+        startupStartedAt: TimeInterval
+    ) -> EarlyRealtimePreconnect? {
+        guard serviceRegistry.shouldUseRealtimeTranscription(for: configuration) else {
+            return nil
+        }
+
+        let task = Task { @MainActor [weak self] in
+            guard let self else { throw CancellationError() }
+
+            let preconnectStartedAt = ProcessInfo.processInfo.systemUptime
+            try Task.checkCancellation()
+            let preparedSession = try await self.prepareRealtimeSessionIfNeeded(
+                configuration: configuration,
+                startID: startID
+            )
+            if Task.isCancelled {
+                preparedSession?.session.cancel()
+                throw CancellationError()
+            }
+            if preparedSession != nil {
+                let now = ProcessInfo.processInfo.systemUptime
+                self.logger.notice("Recording startup realtime preconnect started model=\(configuration.model.displayName, privacy: .public) elapsed=\(now - startupStartedAt, format: .fixed(precision: 3), privacy: .public)s duration=\(now - preconnectStartedAt, format: .fixed(precision: 3), privacy: .public)s")
+            }
+            return preparedSession
+        }
+
+        return EarlyRealtimePreconnect(configuration: configuration, task: task)
+    }
+
+    private func discardEarlyRealtimePreconnect(
+        _ preconnect: EarlyRealtimePreconnect?,
+        reason: String
+    ) {
+        guard let preconnect else { return }
+
+        preconnect.task.cancel()
+        Task { @MainActor [weak self] in
+            do {
+                if let preparedSession = try await preconnect.task.value {
+                    preparedSession.session.cancel()
+                    self?.logger.notice("Recording startup discarded early realtime session reason=\(reason, privacy: .public)")
+                }
+            } catch {
+                // Cancellation or startup failure means there is no reusable session to clean up.
+            }
+        }
+    }
+
+    private func beginInitialRealtimePreconnect(
+        startID: UUID,
+        startupStartedAt: TimeInterval
+    ) -> EarlyRealtimePreconnect? {
+        ModeRuntimeResolver.transcriptionConfiguration(
+            transcriptionModelManager: transcriptionModelManager
+        ).flatMap { initialConfiguration in
+            beginRealtimePreconnectIfNeeded(
+                configuration: initialConfiguration,
+                startID: startID,
+                startupStartedAt: startupStartedAt
+            )
+        }
+    }
+
     private func realtimeConfigurationMatches(
         _ lhs: TranscriptionRuntimeConfiguration,
         _ rhs: TranscriptionRuntimeConfiguration
@@ -434,14 +505,27 @@ class VoiceInkEngine: NSObject, ObservableObject {
                     let hardwareStart = self.recorder.beginStartRecording(toOutputFile: permanentURL)
                     self.activeHardwareStart = hardwareStart
 
+                    let modeTask = ActiveWindowService.shared.beginApplyingConfiguration(modeId: modeId) { [weak self] in
+                        guard let self else { return false }
+                        return self.activeRecordingStartID == startID && !self.shouldCancelRecording
+                    }
+
                     Task { @MainActor [self] in
-                        var activeModeTask: Task<Void, Never>?
+                        let activeModeTask = modeTask
                         do {
+                            var initialRealtimePreconnect: EarlyRealtimePreconnect?
+                            var didHandleInitialRealtimePreconnect = false
                             var preparedRealtimeSession: PreparedRealtimeSession?
                             var didConsumePreparedRealtimeSession = false
                             defer {
                                 if !didConsumePreparedRealtimeSession {
                                     preparedRealtimeSession?.session.cancel()
+                                }
+                                if !didHandleInitialRealtimePreconnect {
+                                    self.discardEarlyRealtimePreconnect(
+                                        initialRealtimePreconnect,
+                                        reason: "startup abandoned"
+                                    )
                                 }
                             }
 
@@ -480,25 +564,10 @@ class VoiceInkEngine: NSObject, ObservableObject {
                             self.isStartupAudioCaptureActive = false
                             self.recordingState = .recording
                             self.logger.notice("Recording startup state=recording elapsed=\(startupElapsed(), format: .fixed(precision: 3), privacy: .public)s")
-
-                            let modeTask = ActiveWindowService.shared.beginApplyingConfiguration(modeId: modeId) { [weak self] in
-                                guard let self else { return false }
-                                return self.activeRecordingStartID == startID && !self.shouldCancelRecording
-                            }
-                            activeModeTask = modeTask
-
-                            if let initialConfiguration = ModeRuntimeResolver.transcriptionConfiguration(
-                                transcriptionModelManager: self.transcriptionModelManager
-                            ) {
-                                let preconnectStart = ProcessInfo.processInfo.systemUptime
-                                preparedRealtimeSession = try await self.prepareRealtimeSessionIfNeeded(
-                                    configuration: initialConfiguration,
-                                    startID: startID
-                                )
-                                if preparedRealtimeSession != nil {
-                                    self.logger.notice("Recording startup realtime preconnect started model=\(initialConfiguration.model.displayName, privacy: .public) elapsed=\(startupElapsed(), format: .fixed(precision: 3), privacy: .public)s duration=\(ProcessInfo.processInfo.systemUptime - preconnectStart, format: .fixed(precision: 3), privacy: .public)s")
-                                }
-                            }
+                            initialRealtimePreconnect = self.beginInitialRealtimePreconnect(
+                                startID: startID,
+                                startupStartedAt: startupStartedAt
+                            )
 
                             guard RecordingStartupContinuationPolicy.shouldContinue(
                                 activeRecordingStartID: self.activeRecordingStartID,
@@ -525,7 +594,7 @@ class VoiceInkEngine: NSObject, ObservableObject {
                             }
 
                             let modeSettled = await self.waitForStartupModeConfiguration(
-                                modeTask,
+                                activeModeTask,
                                 budgetNanoseconds: self.startupModeSettleBudgetNanoseconds
                             )
                             if modeSettled {
@@ -579,6 +648,25 @@ class VoiceInkEngine: NSObject, ObservableObject {
                             }
                             self.currentSessionTranscriptionConfiguration = transcriptionConfiguration
                             self.logger.notice("Recording startup configuration snapshot ready model=\(transcriptionConfiguration.model.displayName, privacy: .public) realtime=\(transcriptionConfiguration.isRealtimeEnabled, privacy: .public) elapsed=\(startupElapsed(), format: .fixed(precision: 3), privacy: .public)s")
+
+                            if let initialRealtimePreconnect {
+                                if self.realtimeConfigurationMatches(initialRealtimePreconnect.configuration, transcriptionConfiguration) {
+                                    didHandleInitialRealtimePreconnect = true
+                                    do {
+                                        preparedRealtimeSession = try await initialRealtimePreconnect.task.value
+                                    } catch is CancellationError {
+                                        throw CancellationError()
+                                    } catch {
+                                        self.logger.warning("Recording startup early realtime preconnect failed error=\(error, privacy: .public)")
+                                    }
+                                } else {
+                                    didHandleInitialRealtimePreconnect = true
+                                    self.discardEarlyRealtimePreconnect(
+                                        initialRealtimePreconnect,
+                                        reason: "final configuration changed"
+                                    )
+                                }
+                            }
 
                             let audioChunkCallback: ((Data) -> Void)?
                             if self.serviceRegistry.shouldUseRealtimeTranscription(for: transcriptionConfiguration) {
@@ -681,7 +769,7 @@ class VoiceInkEngine: NSObject, ObservableObject {
                             }
 
                         } catch {
-                            activeModeTask?.cancel()
+                            activeModeTask.cancel()
                             let isStaleStart = self.activeRecordingStartID != startID
                             let wasCancelled = error is CancellationError
                                 || self.shouldCancelRecording
