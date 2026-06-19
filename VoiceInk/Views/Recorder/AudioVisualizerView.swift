@@ -1,5 +1,36 @@
 import SwiftUI
 
+struct AudioVisualizerBarModel {
+    static func barWeights(count: Int) -> [CGFloat] {
+        (0..<count).map { index in
+            let center = CGFloat(count - 1) / 2
+            let normalizedDistance = abs(CGFloat(index) - center) / max(center, 1)
+            let centerBoost = 1.0 - normalizedDistance * 0.42
+            let contour = 0.78 + 0.22 * sin(CGFloat(index) * 1.7)
+            return max(0.35, centerBoost * contour)
+        }
+    }
+
+    static func barHeight(
+        for index: Int,
+        weights: [CGFloat],
+        averagePower: Double,
+        peakPower: Double,
+        isActive: Bool,
+        minHeight: CGFloat,
+        maxHeight: CGFloat
+    ) -> CGFloat {
+        guard isActive else { return minHeight }
+        guard weights.indices.contains(index) else { return minHeight }
+
+        let average = max(0, min(1, averagePower))
+        let peak = max(0, min(1, peakPower))
+        let amplitude = CGFloat(pow(max(average, peak * 0.72), 0.7))
+
+        return minHeight + amplitude * weights[index] * (maxHeight - minHeight)
+    }
+}
+
 struct AudioVisualizer: View {
     let audioMeter: AudioMeter
     let color: Color
@@ -33,23 +64,19 @@ struct AudioVisualizer: View {
     }
 
     private func barHeight(for index: Int) -> CGFloat {
-        guard isActive else { return minHeight }
-
-        let average = max(0, min(1, audioMeter.averagePower))
-        let peak = max(0, min(1, audioMeter.peakPower))
-        let amplitude = CGFloat(pow(max(average, peak * 0.72), 0.7))
-
-        return minHeight + amplitude * barWeights[index] * (maxHeight - minHeight)
+        AudioVisualizerBarModel.barHeight(
+            for: index,
+            weights: barWeights,
+            averagePower: audioMeter.averagePower,
+            peakPower: audioMeter.peakPower,
+            isActive: isActive,
+            minHeight: minHeight,
+            maxHeight: maxHeight
+        )
     }
 
     private static func makeBarWeights(count: Int) -> [CGFloat] {
-        (0..<count).map { index in
-            let center = CGFloat(count - 1) / 2
-            let normalizedDistance = abs(CGFloat(index) - center) / max(center, 1)
-            let centerBoost = 1.0 - normalizedDistance * 0.42
-            let contour = 0.78 + 0.22 * sin(CGFloat(index) * 1.7)
-            return max(0.35, centerBoost * contour)
-        }
+        AudioVisualizerBarModel.barWeights(count: count)
     }
 }
 

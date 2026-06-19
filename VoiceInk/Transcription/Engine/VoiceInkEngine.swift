@@ -133,17 +133,6 @@ class VoiceInkEngine: NSObject, ObservableObject {
         }
     }
 
-    private struct PreparedRealtimeSession {
-        let configuration: TranscriptionRuntimeConfiguration
-        let session: TranscriptionSession
-        let audioChunkCallback: (Data) -> Void
-    }
-
-    private struct EarlyRealtimePreconnect {
-        let configuration: TranscriptionRuntimeConfiguration
-        let task: Task<PreparedRealtimeSession?, Error>
-    }
-
     @Published var recordingState: RecordingState = .idle
     @Published var shouldCancelRecording = false
     @Published var partialTranscript: String = ""
@@ -322,27 +311,20 @@ class VoiceInkEngine: NSObject, ObservableObject {
             return nil
         }
 
-        let task = Task { @MainActor [weak self] in
-            guard let self else { throw CancellationError() }
-
-            let preconnectStartedAt = ProcessInfo.processInfo.systemUptime
-            try Task.checkCancellation()
-            let preparedSession = try await self.prepareRealtimeSessionIfNeeded(
-                configuration: configuration,
-                startID: startID
-            )
-            if Task.isCancelled {
-                preparedSession?.session.cancel()
-                throw CancellationError()
+        return RecordingRealtimePreconnectLifecycle.begin(
+            configuration: configuration,
+            startupStartedAt: startupStartedAt,
+            prepare: { [weak self] in
+                guard let self else { throw CancellationError() }
+                return try await self.prepareRealtimeSessionIfNeeded(
+                    configuration: configuration,
+                    startID: startID
+                )
+            },
+            onPrepared: { [weak self] configuration, startupElapsed, prepareDuration in
+                self?.logger.notice("Recording startup realtime preconnect started model=\(configuration.model.displayName, privacy: .public) elapsed=\(startupElapsed, format: .fixed(precision: 3), privacy: .public)s duration=\(prepareDuration, format: .fixed(precision: 3), privacy: .public)s")
             }
-            if preparedSession != nil {
-                let now = ProcessInfo.processInfo.systemUptime
-                self.logger.notice("Recording startup realtime preconnect started model=\(configuration.model.displayName, privacy: .public) elapsed=\(now - startupStartedAt, format: .fixed(precision: 3), privacy: .public)s duration=\(now - preconnectStartedAt, format: .fixed(precision: 3), privacy: .public)s")
-            }
-            return preparedSession
-        }
-
-        return EarlyRealtimePreconnect(configuration: configuration, task: task)
+        )
     }
 
     private func discardEarlyRealtimePreconnect(
@@ -351,16 +333,8 @@ class VoiceInkEngine: NSObject, ObservableObject {
     ) {
         guard let preconnect else { return }
 
-        preconnect.task.cancel()
-        Task { @MainActor [weak self] in
-            do {
-                if let preparedSession = try await preconnect.task.value {
-                    preparedSession.session.cancel()
-                    self?.logger.notice("Recording startup discarded early realtime session reason=\(reason, privacy: .public)")
-                }
-            } catch {
-                // Cancellation or startup failure means there is no reusable session to clean up.
-            }
+        RecordingRealtimePreconnectLifecycle.discard(preconnect) { [weak self] _ in
+            self?.logger.notice("Recording startup discarded early realtime session reason=\(reason, privacy: .public)")
         }
     }
 
@@ -383,11 +357,7 @@ class VoiceInkEngine: NSObject, ObservableObject {
         _ lhs: TranscriptionRuntimeConfiguration,
         _ rhs: TranscriptionRuntimeConfiguration
     ) -> Bool {
-        lhs.isRealtimeEnabled == rhs.isRealtimeEnabled &&
-            lhs.model.name == rhs.model.name &&
-            lhs.model.provider == rhs.model.provider &&
-            lhs.language == rhs.language &&
-            lhs.requestContext.prompt == rhs.requestContext.prompt
+        RecordingRealtimePreconnectLifecycle.configurationsMatch(lhs, rhs)
     }
 
     private func waitForStartupModeConfiguration(

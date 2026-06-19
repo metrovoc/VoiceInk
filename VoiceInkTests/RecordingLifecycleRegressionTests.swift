@@ -1,4 +1,5 @@
 import Foundation
+import SwiftUI
 import SwiftData
 import Testing
 @testable import VoiceInk_CE
@@ -734,6 +735,235 @@ struct RecordingLifecycleRegressionTests {
         #expect(oldConfiguration.requestContext.prompt == "old prompt")
         #expect(newConfiguration.requestContext.prompt == "new prompt")
     }
+
+    @MainActor
+    @Test func realtimePreconnectDiscardCancelsAlreadyPreparedSession() async throws {
+        let configuration = makeRealtimeConfiguration()
+        let session = FakeTranscriptionSession()
+        let preparedSession = PreparedRealtimeSession(
+            configuration: configuration,
+            session: session,
+            audioChunkCallback: { _ in }
+        )
+        let preconnect = RecordingRealtimePreconnectLifecycle.begin(
+            configuration: configuration,
+            startupStartedAt: ProcessInfo.processInfo.systemUptime,
+            prepare: { preparedSession }
+        )
+        _ = try await preconnect.task.value
+
+        var discardedPreparedSession = false
+        let cleanup = RecordingRealtimePreconnectLifecycle.discard(preconnect) { _ in
+            discardedPreparedSession = true
+        }
+        await cleanup?.value
+
+        #expect(discardedPreparedSession)
+        #expect(session.cancelCallCount == 1)
+    }
+
+    @MainActor
+    @Test func realtimePreconnectDiscardCancelsSessionPreparedAfterTaskCancellation() async throws {
+        let configuration = makeRealtimeConfiguration()
+        let session = FakeTranscriptionSession()
+        let preparedSession = PreparedRealtimeSession(
+            configuration: configuration,
+            session: session,
+            audioChunkCallback: { _ in }
+        )
+        let (startedStream, startedContinuation) = AsyncStream.makeStream(of: Void.self)
+        var prepareContinuation: CheckedContinuation<PreparedRealtimeSession?, Never>?
+
+        let preconnect = RecordingRealtimePreconnectLifecycle.begin(
+            configuration: configuration,
+            startupStartedAt: ProcessInfo.processInfo.systemUptime,
+            prepare: {
+                await withCheckedContinuation { continuation in
+                    prepareContinuation = continuation
+                    startedContinuation.yield(())
+                }
+            }
+        )
+
+        var startedIterator = startedStream.makeAsyncIterator()
+        _ = await startedIterator.next()
+        startedContinuation.finish()
+
+        let cleanup = RecordingRealtimePreconnectLifecycle.discard(preconnect)
+        let continuation = try #require(prepareContinuation)
+        continuation.resume(returning: preparedSession)
+        await cleanup?.value
+
+        do {
+            _ = try await preconnect.task.value
+            Issue.record("Expected cancelled preconnect task to throw CancellationError")
+        } catch is CancellationError {
+            #expect(session.cancelCallCount == 1)
+        } catch {
+            Issue.record("Expected CancellationError, got \(error)")
+        }
+    }
+
+    @Test func realtimePreconnectConfigurationMatchingIncludesStreamingInputs() {
+        let baseConfiguration = makeRealtimeConfiguration(
+            model: makeCloudModel(name: "deepgram-live", provider: .deepgram),
+            language: "en",
+            isRealtimeEnabled: true,
+            prompt: "domain prompt"
+        )
+
+        #expect(
+            RecordingRealtimePreconnectLifecycle.configurationsMatch(
+                baseConfiguration,
+                makeRealtimeConfiguration(
+                    model: makeCloudModel(name: "deepgram-live", provider: .deepgram),
+                    language: "en",
+                    isRealtimeEnabled: true,
+                    prompt: "domain prompt"
+                )
+            )
+        )
+        #expect(
+            !RecordingRealtimePreconnectLifecycle.configurationsMatch(
+                baseConfiguration,
+                makeRealtimeConfiguration(
+                    model: makeCloudModel(name: "deepgram-live", provider: .deepgram),
+                    language: "en",
+                    isRealtimeEnabled: false,
+                    prompt: "domain prompt"
+                )
+            )
+        )
+        #expect(
+            !RecordingRealtimePreconnectLifecycle.configurationsMatch(
+                baseConfiguration,
+                makeRealtimeConfiguration(
+                    model: makeCloudModel(name: "nova-3", provider: .deepgram),
+                    language: "en",
+                    isRealtimeEnabled: true,
+                    prompt: "domain prompt"
+                )
+            )
+        )
+        #expect(
+            !RecordingRealtimePreconnectLifecycle.configurationsMatch(
+                baseConfiguration,
+                makeRealtimeConfiguration(
+                    model: makeCloudModel(name: "deepgram-live", provider: .elevenLabs),
+                    language: "en",
+                    isRealtimeEnabled: true,
+                    prompt: "domain prompt"
+                )
+            )
+        )
+        #expect(
+            !RecordingRealtimePreconnectLifecycle.configurationsMatch(
+                baseConfiguration,
+                makeRealtimeConfiguration(
+                    model: makeCloudModel(name: "deepgram-live", provider: .deepgram),
+                    language: "ja",
+                    isRealtimeEnabled: true,
+                    prompt: "domain prompt"
+                )
+            )
+        )
+        #expect(
+            !RecordingRealtimePreconnectLifecycle.configurationsMatch(
+                baseConfiguration,
+                makeRealtimeConfiguration(
+                    model: makeCloudModel(name: "deepgram-live", provider: .deepgram),
+                    language: "en",
+                    isRealtimeEnabled: true,
+                    prompt: "other prompt"
+                )
+            )
+        )
+    }
+
+    @Test func audioVisualizerBarModelIsDeterministicAndInputDriven() {
+        let weights = AudioVisualizerBarModel.barWeights(count: 18)
+        let repeatedWeights = AudioVisualizerBarModel.barWeights(count: 18)
+
+        #expect(weights == repeatedWeights)
+        #expect(weights.count == 18)
+
+        let minHeight = CGFloat(4)
+        let maxHeight = CGFloat(28)
+        let quietHeight = AudioVisualizerBarModel.barHeight(
+            for: 8,
+            weights: weights,
+            averagePower: 0,
+            peakPower: 0,
+            isActive: true,
+            minHeight: minHeight,
+            maxHeight: maxHeight
+        )
+        let repeatedQuietHeight = AudioVisualizerBarModel.barHeight(
+            for: 8,
+            weights: weights,
+            averagePower: 0,
+            peakPower: 0,
+            isActive: true,
+            minHeight: minHeight,
+            maxHeight: maxHeight
+        )
+        let activeHeight = AudioVisualizerBarModel.barHeight(
+            for: 8,
+            weights: weights,
+            averagePower: 0.4,
+            peakPower: 0.8,
+            isActive: true,
+            minHeight: minHeight,
+            maxHeight: maxHeight
+        )
+        let inactiveHeight = AudioVisualizerBarModel.barHeight(
+            for: 8,
+            weights: weights,
+            averagePower: 1,
+            peakPower: 1,
+            isActive: false,
+            minHeight: minHeight,
+            maxHeight: maxHeight
+        )
+        let invalidIndexHeight = AudioVisualizerBarModel.barHeight(
+            for: weights.count,
+            weights: weights,
+            averagePower: 1,
+            peakPower: 1,
+            isActive: true,
+            minHeight: minHeight,
+            maxHeight: maxHeight
+        )
+
+        #expect(quietHeight == repeatedQuietHeight)
+        #expect(quietHeight == minHeight)
+        #expect(activeHeight > minHeight)
+        #expect(activeHeight <= maxHeight)
+        #expect(inactiveHeight == minHeight)
+        #expect(invalidIndexHeight == minHeight)
+    }
+
+    @Test func voiceInkEngineStartsRealtimePreconnectAfterAudioCaptureAndRecordingState() throws {
+        let source = try readProjectSource("VoiceInk/Transcription/Engine/VoiceInkEngine.swift")
+        let captureStarted = try #require(
+            source.range(of: "Recording startup audio capture started")
+        )
+        let recordingStateSet = try #require(
+            source.range(of: "self.recordingState = .recording")
+        )
+        let preconnectStarted = try #require(
+            source.range(of: "initialRealtimePreconnect = self.beginInitialRealtimePreconnect")
+        )
+
+        #expect(captureStarted.lowerBound < recordingStateSet.lowerBound)
+        #expect(recordingStateSet.lowerBound < preconnectStarted.lowerBound)
+    }
+
+    @Test func audioVisualizerDoesNotUseTimelineDrivenRendering() throws {
+        let source = try readProjectSource("VoiceInk/Views/Recorder/AudioVisualizerView.swift")
+
+        #expect(!source.contains("TimelineView"))
+    }
 }
 
 @MainActor
@@ -756,6 +986,55 @@ private func makeCloudModel(name: String, provider: ModelProvider) -> CloudModel
         supportsStreaming: true,
         supportedLanguages: ["en": "English"]
     )
+}
+
+private func makeRealtimeConfiguration(
+    model: any TranscriptionModel = makeCloudModel(name: "deepgram-live", provider: .deepgram),
+    language: String = "en",
+    isRealtimeEnabled: Bool = true,
+    prompt: String? = "domain prompt"
+) -> TranscriptionRuntimeConfiguration {
+    TranscriptionRuntimeConfiguration(
+        mode: nil,
+        model: model,
+        language: language,
+        isRealtimeEnabled: isRealtimeEnabled,
+        requestContext: TranscriptionRequestContext(language: language, prompt: prompt)
+    )
+}
+
+private func readProjectSource(_ relativePath: String) throws -> String {
+    let testFileURL = URL(fileURLWithPath: #filePath)
+    let projectRootURL = testFileURL
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+    return try String(
+        contentsOf: projectRootURL.appendingPathComponent(relativePath),
+        encoding: .utf8
+    )
+}
+
+@MainActor
+private final class FakeTranscriptionSession: TranscriptionSession {
+    private(set) var cancelCallCount = 0
+    var reusable = true
+    var prepareCallback: ((Data) -> Void)? = { _ in }
+
+    func prepare(configuration: TranscriptionRuntimeConfiguration) async throws -> ((Data) -> Void)? {
+        prepareCallback
+    }
+
+    func canReusePreparedSession() -> Bool {
+        reusable
+    }
+
+    func transcribe(audioURL: URL) async throws -> String {
+        ""
+    }
+
+    func cancel() {
+        cancelCallCount += 1
+    }
 }
 
 private final class FakeStreamingProvider: StreamingTranscriptionProvider, @unchecked Sendable {
