@@ -21,6 +21,8 @@ final class ShortcutMonitor {
     private var interruptibleActions: Set<ShortcutAction> = []
     private var onKeyDown: ((ShortcutAction, TimeInterval) -> Void)?
     private var onKeyUp: ((ShortcutAction, TimeInterval) -> Void)?
+    private var onEventTapKeyDown: ((ShortcutAction, TimeInterval) -> Void)?
+    private var onEventTapKeyUp: ((ShortcutAction, TimeInterval, TimeInterval?) -> Void)?
     private var onShortcutInterrupted: ((ShortcutAction, TimeInterval) -> Void)?
     private var eventTap: CFMachPort?
     private var eventTapRunLoopSource: CFRunLoopSource?
@@ -42,6 +44,8 @@ final class ShortcutMonitor {
         interruptibleActions: Set<ShortcutAction> = [],
         onKeyDown: @escaping (ShortcutAction, TimeInterval) -> Void,
         onKeyUp: @escaping (ShortcutAction, TimeInterval) -> Void,
+        onEventTapKeyDown: ((ShortcutAction, TimeInterval) -> Void)? = nil,
+        onEventTapKeyUp: ((ShortcutAction, TimeInterval, TimeInterval?) -> Void)? = nil,
         onShortcutInterrupted: ((ShortcutAction, TimeInterval) -> Void)? = nil
     ) -> Bool {
         stop()
@@ -60,6 +64,8 @@ final class ShortcutMonitor {
         self.interruptibleActions = interruptibleActions
         self.onKeyDown = onKeyDown
         self.onKeyUp = onKeyUp
+        self.onEventTapKeyDown = onEventTapKeyDown
+        self.onEventTapKeyUp = onEventTapKeyUp
         self.onShortcutInterrupted = onShortcutInterrupted
         stateLock.unlock()
 
@@ -73,6 +79,8 @@ final class ShortcutMonitor {
         interruptibleActions = []
         onKeyDown = nil
         onKeyUp = nil
+        onEventTapKeyDown = nil
+        onEventTapKeyUp = nil
         onShortcutInterrupted = nil
         stateLock.unlock()
 
@@ -209,12 +217,15 @@ final class ShortcutMonitor {
 
         for action in pressedActions {
             if var state = shortcuts[action] {
+                let pressDuration = state.pressedAt.map { eventTime - $0 }
                 state.isDown = false
                 state.pressedAt = nil
                 state.isInterrupted = false
                 shortcuts[action] = state
+                dispatchKeyUp(for: action, eventTime: eventTime, pressDuration: pressDuration)
+            } else {
+                dispatchKeyUp(for: action, eventTime: eventTime, pressDuration: nil)
             }
-            dispatchKeyUp(for: action, eventTime: eventTime)
         }
     }
 
@@ -268,12 +279,13 @@ final class ShortcutMonitor {
                 shouldSuppress = true
                 dispatchKeyDown(for: action, eventTime: eventTime)
             case .keyUp:
+                let pressDuration = state.pressedAt.map { eventTime - $0 }
                 state.isDown = false
                 state.pressedAt = nil
                 state.isInterrupted = false
                 shortcuts[action] = state
                 shouldSuppress = true
-                dispatchKeyUp(for: action, eventTime: eventTime)
+                dispatchKeyUp(for: action, eventTime: eventTime, pressDuration: pressDuration)
             }
         }
 
@@ -332,11 +344,12 @@ final class ShortcutMonitor {
 
         if state.isDown {
             if state.shortcut.shouldReleaseModifierEvent(keyCode: keyCode, modifierFlags: modifierFlags) {
+                let pressDuration = state.pressedAt.map { eventTime - $0 }
                 state.isDown = false
                 state.pressedAt = nil
                 state.isInterrupted = false
                 shortcuts[action] = state
-                dispatchKeyUp(for: action, eventTime: eventTime)
+                dispatchKeyUp(for: action, eventTime: eventTime, pressDuration: pressDuration)
             }
 
             return
@@ -374,6 +387,7 @@ final class ShortcutMonitor {
     }
 
     private func dispatchKeyDown(for action: ShortcutAction, eventTime: TimeInterval) {
+        onEventTapKeyDown?(action, eventTime)
         let callback = onKeyDown
         let generation = generation
         DispatchQueue.main.async { [weak self, callback] in
@@ -383,7 +397,8 @@ final class ShortcutMonitor {
         }
     }
 
-    private func dispatchKeyUp(for action: ShortcutAction, eventTime: TimeInterval) {
+    private func dispatchKeyUp(for action: ShortcutAction, eventTime: TimeInterval, pressDuration: TimeInterval?) {
+        onEventTapKeyUp?(action, eventTime, pressDuration)
         let callback = onKeyUp
         let generation = generation
         DispatchQueue.main.async { [weak self, callback] in

@@ -89,6 +89,181 @@ struct RecordingLifecycleRegressionTests {
         )
     }
 
+    @Test func recordingStartupContinuationPolicyDoesNotDependOnPanelVisibility() {
+        let startID = UUID()
+
+        #expect(
+            RecordingStartupContinuationPolicy.shouldContinue(
+                activeRecordingStartID: startID,
+                startID: startID,
+                shouldCancelRecording: false
+            )
+        )
+        #expect(
+            !RecordingStartupContinuationPolicy.shouldContinue(
+                activeRecordingStartID: startID,
+                startID: startID,
+                shouldCancelRecording: true
+            )
+        )
+        #expect(
+            !RecordingStartupContinuationPolicy.shouldContinue(
+                activeRecordingStartID: UUID(),
+                startID: startID,
+                shouldCancelRecording: false
+            )
+        )
+    }
+
+    @Test func recordingHardwareStartCoordinatorInvalidatesOlderStartWhenNewStartActivates() {
+        let coordinator = RecordingHardwareStartCoordinator()
+        let olderStart = RecordingHardwareStartToken()
+        let newerStart = RecordingHardwareStartToken()
+
+        coordinator.activate(olderStart)
+        #expect(coordinator.isActive(olderStart))
+
+        coordinator.activate(newerStart)
+
+        #expect(olderStart.isCancelled)
+        #expect(!coordinator.isActive(olderStart))
+        #expect(coordinator.isActive(newerStart))
+    }
+
+    @Test func recordingHardwareStartCoordinatorCancelOnlyClearsMatchingStart() {
+        let coordinator = RecordingHardwareStartCoordinator()
+        let staleStart = RecordingHardwareStartToken()
+        let activeStart = RecordingHardwareStartToken()
+
+        coordinator.activate(staleStart)
+        coordinator.activate(activeStart)
+        coordinator.cancel(staleStart)
+
+        #expect(staleStart.isCancelled)
+        #expect(coordinator.isActive(activeStart))
+
+        coordinator.cancel(activeStart)
+
+        #expect(activeStart.isCancelled)
+        #expect(!coordinator.isActive(activeStart))
+    }
+
+    @Test func recordingShortcutFastStopStateMatchesShortcutModes() {
+        let state = RecordingShortcutFastStopState(
+            primaryMode: .toggle,
+            secondaryMode: .pushToTalk,
+            hybridPressThreshold: 0.5
+        )
+
+        state.updateRecorderVisible(true)
+        state.updateRecordingState(.recording)
+
+        #expect(state.shouldRequestStopOnKeyDown(action: .primaryRecording))
+        #expect(!state.shouldRequestStopOnKeyUp(action: .primaryRecording, pressDuration: 0.1))
+        #expect(!state.shouldRequestStopOnKeyDown(action: .secondaryRecording))
+        #expect(state.shouldRequestStopOnKeyUp(action: .secondaryRecording, pressDuration: 0.1))
+
+        state.updatePrimaryMode(.hybrid)
+
+        #expect(state.shouldRequestStopOnKeyDown(action: .primaryRecording))
+        #expect(!state.shouldRequestStopOnKeyUp(action: .primaryRecording, pressDuration: 0.2))
+        #expect(state.shouldRequestStopOnKeyUp(action: .primaryRecording, pressDuration: 0.6))
+    }
+
+    @Test func recordingShortcutFastStopStateRequiresVisibleActiveRecording() {
+        let state = RecordingShortcutFastStopState(
+            primaryMode: .toggle,
+            secondaryMode: .pushToTalk
+        )
+
+        state.updateRecorderVisible(false)
+        state.updateRecordingState(.recording)
+        #expect(!state.shouldRequestStopOnKeyDown(action: .primaryRecording))
+
+        state.updateRecorderVisible(true)
+        state.updateRecordingState(.idle)
+        #expect(!state.shouldRequestStopOnKeyDown(action: .primaryRecording))
+
+        state.updateRecordingState(.starting)
+        #expect(state.shouldRequestStopOnKeyDown(action: .primaryRecording))
+        #expect(!state.shouldRequestStopOnKeyDown(action: .pasteLastTranscription))
+    }
+
+    @MainActor
+    @Test func recordingShortcutActiveStopKeyDownBypassesStartupCooldown() async {
+        for mode in [RecordingShortcutManager.Mode.toggle, .hybrid] {
+            var isRecorderVisible = false
+            var recordingState = RecordingState.idle
+            var toggleCount = 0
+            let handler = RecordingShortcutModeHandler(
+                canHandleShortcutAction: { true },
+                isRecorderVisible: { isRecorderVisible },
+                recordingState: { recordingState },
+                toggleRecorderPanel: { _ in
+                    toggleCount += 1
+                    isRecorderVisible.toggle()
+                    recordingState = isRecorderVisible ? .recording : .idle
+                },
+                cancelRecording: {}
+            )
+
+            await handler.handleKeyDown(
+                action: .primaryRecording,
+                eventTime: 10,
+                mode: mode
+            )
+            await handler.handleKeyUp(
+                action: .primaryRecording,
+                eventTime: 10.1,
+                mode: mode
+            )
+            await handler.handleKeyDown(
+                action: .primaryRecording,
+                eventTime: 10.2,
+                mode: mode
+            )
+
+            #expect(toggleCount == 2)
+            #expect(!isRecorderVisible)
+            #expect(recordingState == .idle)
+        }
+    }
+
+    @MainActor
+    @Test func recordingShortcutActiveStopKeyDownDoesNotRequireHandsFreeState() async {
+        for mode in [RecordingShortcutManager.Mode.toggle, .hybrid] {
+            var isRecorderVisible = true
+            var recordingState = RecordingState.recording
+            var toggleCount = 0
+            let handler = RecordingShortcutModeHandler(
+                canHandleShortcutAction: { true },
+                isRecorderVisible: { isRecorderVisible },
+                recordingState: { recordingState },
+                toggleRecorderPanel: { _ in
+                    toggleCount += 1
+                    isRecorderVisible.toggle()
+                    recordingState = isRecorderVisible ? .recording : .idle
+                },
+                cancelRecording: {}
+            )
+
+            await handler.handleKeyDown(
+                action: .primaryRecording,
+                eventTime: 20,
+                mode: mode
+            )
+            await handler.handleKeyUp(
+                action: .primaryRecording,
+                eventTime: 20.1,
+                mode: mode
+            )
+
+            #expect(toggleCount == 1)
+            #expect(!isRecorderVisible)
+            #expect(recordingState == .idle)
+        }
+    }
+
     @MainActor
     @Test func streamingServiceDrainsBufferedAudioBeforeCommit() async throws {
         let provider = FakeStreamingProvider(commitEvent: .committed(text: "final text"))
@@ -469,7 +644,7 @@ struct RecordingLifecycleRegressionTests {
     }
 
     @MainActor
-    @Test func streamingSessionFallsBackToBatchWhenStreamingReturnsEmptyText() async throws {
+    @Test func streamingSessionReturnsEmptyTextWithoutBatchFallbackWhenStreamingFinalizesEmpty() async throws {
         let streamingService = FakeStreamingService(stopResult: .success("  \n"))
         let fallbackService = FakeBatchTranscriptionService(result: "batch transcript")
         let streamingModel = makeCloudModel(name: "deepgram-live", provider: .deepgram)
@@ -492,12 +667,12 @@ struct RecordingLifecycleRegressionTests {
 
         let text = try await session.transcribe(audioURL: URL(fileURLWithPath: "/tmp/voiceink-test.wav"))
 
-        #expect(text == "batch transcript")
+        #expect(text == "")
         #expect(streamingService.sentChunks == [chunk])
         #expect(streamingService.stopCallCount == 1)
-        #expect(streamingService.cancelCallCount == 1)
-        #expect(fallbackService.transcribeCallCount == 1)
-        #expect(fallbackService.modelNames == ["deepgram-live"])
+        #expect(streamingService.cancelCallCount == 0)
+        #expect(fallbackService.transcribeCallCount == 0)
+        #expect(fallbackService.modelNames.isEmpty)
     }
 
     @MainActor

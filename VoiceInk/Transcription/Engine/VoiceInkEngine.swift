@@ -112,6 +112,16 @@ enum RecordingControlPlaneStopPolicy {
     }
 }
 
+enum RecordingStartupContinuationPolicy {
+    static func shouldContinue(
+        activeRecordingStartID: UUID?,
+        startID: UUID,
+        shouldCancelRecording: Bool
+    ) -> Bool {
+        activeRecordingStartID == startID && !shouldCancelRecording
+    }
+}
+
 @MainActor
 class VoiceInkEngine: NSObject, ObservableObject {
     private enum RecordingUseCase {
@@ -139,6 +149,7 @@ class VoiceInkEngine: NSObject, ObservableObject {
     private var canceledPipelineTranscriptionIDs = Set<UUID>()
     private var activeRecordingUseCase: RecordingUseCase = .newSession
     private var activePipelineUseCase: RecordingUseCase = .newSession
+    private var activeHardwareStart: RecordingHardwareStartHandle?
     private var activeRecordingContextStore: RecordingContextSnapshotStore?
     private var activeRecordingContextTasks: [Task<Void, Never>] = []
     private var isStartupAudioCaptureActive = false
@@ -380,24 +391,52 @@ class VoiceInkEngine: NSObject, ObservableObject {
 
             requestRecordPermission { [self] granted in
                 if granted {
-                    Task { @MainActor [self] in
-                        let startupStartedAt = ProcessInfo.processInfo.systemUptime
-                        func startupElapsed() -> Double {
-                            ProcessInfo.processInfo.systemUptime - startupStartedAt
-                        }
-                        let startID = UUID()
-                        self.activeRecordingStartID = startID
-                        self.logger.notice("Recording startup requested id=\(startID.uuidString, privacy: .public)")
+                    let startupStartedAt = ProcessInfo.processInfo.systemUptime
+                    func startupElapsed() -> Double {
+                        ProcessInfo.processInfo.systemUptime - startupStartedAt
+                    }
+                    self.cancelActiveHardwareStart()
+                    let startID = UUID()
+                    self.activeRecordingStartID = startID
+                    self.logger.notice("Recording startup requested id=\(startID.uuidString, privacy: .public)")
 
+                    let fileName = "\(UUID().uuidString).wav"
+                    let permanentURL = self.recordingsDirectory.appendingPathComponent(fileName)
+                    self.recordedFile = permanentURL
+                    let startupAudioRelay = StartupAudioChunkRelay()
+                    self.recorder.onAudioChunk = { data in
+                        startupAudioRelay.send(data)
+                    }
+                    self.recordingState = .starting
+                    self.logger.notice("Recording startup state=starting elapsed=\(startupElapsed(), format: .fixed(precision: 3), privacy: .public)s")
+
+                    guard RecordingStartupContinuationPolicy.shouldContinue(
+                        activeRecordingStartID: self.activeRecordingStartID,
+                        startID: startID,
+                        shouldCancelRecording: self.shouldCancelRecording
+                    ) else {
+                        _ = startupAudioRelay.discard()
+                        self.recorder.onAudioChunk = nil
+                        if self.activeRecordingStartID == startID {
+                            self.recordedFile = nil
+                            self.recordingState = .idle
+                            self.activeRecordingStartID = nil
+                            self.isStartupAudioCaptureActive = false
+                            self.isRecordingControlPlaneReady = false
+                            self.shouldStopAfterStartup = false
+                            self.clearActiveRecordingContext()
+                        }
+                        return
+                    }
+
+                    self.recorder.scheduleSystemMute()
+                    let hardwareStartStartedAt = ProcessInfo.processInfo.systemUptime
+                    let hardwareStart = self.recorder.beginStartRecording(toOutputFile: permanentURL)
+                    self.activeHardwareStart = hardwareStart
+
+                    Task { @MainActor [self] in
                         var activeModeTask: Task<Void, Never>?
                         do {
-                            let fileName = "\(UUID().uuidString).wav"
-                            let permanentURL = self.recordingsDirectory.appendingPathComponent(fileName)
-                            self.recordedFile = permanentURL
-                            let startupAudioRelay = StartupAudioChunkRelay()
-                            self.recorder.onAudioChunk = { data in
-                                startupAudioRelay.send(data)
-                            }
                             var preparedRealtimeSession: PreparedRealtimeSession?
                             var didConsumePreparedRealtimeSession = false
                             defer {
@@ -406,31 +445,17 @@ class VoiceInkEngine: NSObject, ObservableObject {
                                 }
                             }
 
-                            self.recordingState = .starting
-                            self.logger.notice("Recording startup state=starting elapsed=\(startupElapsed(), format: .fixed(precision: 3), privacy: .public)s")
-
-                            guard self.activeRecordingStartID == startID,
-                                  self.recorderUIManager?.isRecorderPanelVisible ?? false,
-                                  !self.shouldCancelRecording else {
-                                _ = startupAudioRelay.discard()
-                                self.recorder.onAudioChunk = nil
-                                if self.activeRecordingStartID == startID {
-                                    self.recordedFile = nil
-                                    self.recordingState = .idle
-                                    self.activeRecordingStartID = nil
-                                    self.isStartupAudioCaptureActive = false
-                                    self.isRecordingControlPlaneReady = false
-                                    self.shouldStopAfterStartup = false
-                                    self.clearActiveRecordingContext()
-                                }
-                                return
+                            let hardwareStartResult = try await hardwareStart.value()
+                            guard self.activeHardwareStart === hardwareStart else {
+                                throw CancellationError()
                             }
-
-                            self.recorder.scheduleSystemMute()
-                            try await self.recorder.startRecording(toOutputFile: permanentURL)
-                            guard self.activeRecordingStartID == startID,
-                                  self.recorderUIManager?.isRecorderPanelVisible ?? false,
-                                  !self.shouldCancelRecording else {
+                            self.activeHardwareStart = nil
+                            self.recorder.finishStartRecording(hardwareStartResult, startTime: hardwareStartStartedAt)
+                            guard RecordingStartupContinuationPolicy.shouldContinue(
+                                activeRecordingStartID: self.activeRecordingStartID,
+                                startID: startID,
+                                shouldCancelRecording: self.shouldCancelRecording
+                            ) else {
                                 _ = startupAudioRelay.discard()
                                 self.recorder.onAudioChunk = nil
                                 if self.shouldCancelRecording {
@@ -475,9 +500,11 @@ class VoiceInkEngine: NSObject, ObservableObject {
                                 }
                             }
 
-                            guard self.activeRecordingStartID == startID,
-                                  self.recorderUIManager?.isRecorderPanelVisible ?? false,
-                                  !self.shouldCancelRecording else {
+                            guard RecordingStartupContinuationPolicy.shouldContinue(
+                                activeRecordingStartID: self.activeRecordingStartID,
+                                startID: startID,
+                                shouldCancelRecording: self.shouldCancelRecording
+                            ) else {
                                 _ = startupAudioRelay.discard()
                                 self.recorder.onAudioChunk = nil
                                 if self.shouldCancelRecording {
@@ -507,9 +534,11 @@ class VoiceInkEngine: NSObject, ObservableObject {
                                 self.logger.notice("Recording startup proceeding with current mode configuration while URL lookup continues elapsed=\(startupElapsed(), format: .fixed(precision: 3), privacy: .public)s")
                             }
 
-                            guard self.activeRecordingStartID == startID,
-                                  self.recorderUIManager?.isRecorderPanelVisible ?? false,
-                                  !self.shouldCancelRecording else {
+                            guard RecordingStartupContinuationPolicy.shouldContinue(
+                                activeRecordingStartID: self.activeRecordingStartID,
+                                startID: startID,
+                                shouldCancelRecording: self.shouldCancelRecording
+                            ) else {
                                 _ = startupAudioRelay.discard()
                                 self.recorder.onAudioChunk = nil
                                 if self.shouldCancelRecording {
@@ -596,9 +625,11 @@ class VoiceInkEngine: NSObject, ObservableObject {
                                 self.logger.notice("Recording startup discarded pre-session audio for file transcription chunks=\(discardStats.bufferedChunks, privacy: .public) bytes=\(discardStats.bufferedBytes, privacy: .public)")
                             }
 
-                            guard self.activeRecordingStartID == startID,
-                                  self.recorderUIManager?.isRecorderPanelVisible ?? false,
-                                  !self.shouldCancelRecording else {
+                            guard RecordingStartupContinuationPolicy.shouldContinue(
+                                activeRecordingStartID: self.activeRecordingStartID,
+                                startID: startID,
+                                shouldCancelRecording: self.shouldCancelRecording
+                            ) else {
                                 _ = startupAudioRelay.discard()
                                 self.cancelCurrentSession()
                                 if self.shouldCancelRecording {
@@ -655,6 +686,9 @@ class VoiceInkEngine: NSObject, ObservableObject {
                             let wasCancelled = error is CancellationError
                                 || self.shouldCancelRecording
                                 || isStaleStart
+                            if self.activeHardwareStart === hardwareStart {
+                                self.activeHardwareStart = nil
+                            }
                             if isStaleStart && !self.shouldCancelRecording {
                                 return
                             }
@@ -908,6 +942,7 @@ class VoiceInkEngine: NSObject, ObservableObject {
     }
 
     func resetRecordingSession() async {
+        cancelActiveHardwareStart()
         cancelCurrentSession()
         activeRecordingStartID = nil
         activePipelineTranscriptionID = nil
@@ -930,6 +965,7 @@ class VoiceInkEngine: NSObject, ObservableObject {
 
     private func requestRecordingCancellation() {
         shouldCancelRecording = true
+        cancelActiveHardwareStart()
 
         if (recordingState == .transcribing || recordingState == .enhancing),
            let activePipelineTranscriptionID {
@@ -940,6 +976,7 @@ class VoiceInkEngine: NSObject, ObservableObject {
     }
 
     private func finishActiveRecorderCancellation() async {
+        cancelActiveHardwareStart()
         activeRecordingStartID = nil
         isStartupAudioCaptureActive = false
         isRecordingControlPlaneReady = false
@@ -1029,12 +1066,18 @@ class VoiceInkEngine: NSObject, ObservableObject {
         }
     }
 
+    private func cancelActiveHardwareStart() {
+        activeHardwareStart?.cancel()
+        activeHardwareStart = nil
+    }
+
     private func finishRecorderSession() async {
         enhancementService?.clearCapturedContexts()
     }
 
     func cleanupResources() async {
         logger.notice("cleanupResources: releasing model resources")
+        cancelActiveHardwareStart()
         activeRecordingStartID = nil
         activeRecordingUseCase = .newSession
         isStartupAudioCaptureActive = false
