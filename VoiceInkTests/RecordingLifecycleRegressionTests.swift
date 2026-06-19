@@ -892,8 +892,8 @@ struct RecordingLifecycleRegressionTests {
         let quietHeight = AudioVisualizerBarModel.barHeight(
             for: 8,
             weights: weights,
-            averagePower: 0,
-            peakPower: 0,
+            level: 0,
+            motionAmount: 0,
             isActive: true,
             minHeight: minHeight,
             maxHeight: maxHeight
@@ -901,8 +901,8 @@ struct RecordingLifecycleRegressionTests {
         let repeatedQuietHeight = AudioVisualizerBarModel.barHeight(
             for: 8,
             weights: weights,
-            averagePower: 0,
-            peakPower: 0,
+            level: 0,
+            motionAmount: 0,
             isActive: true,
             minHeight: minHeight,
             maxHeight: maxHeight
@@ -910,8 +910,8 @@ struct RecordingLifecycleRegressionTests {
         let activeHeight = AudioVisualizerBarModel.barHeight(
             for: 8,
             weights: weights,
-            averagePower: 0.4,
-            peakPower: 0.8,
+            level: 0.6,
+            motionAmount: 0,
             isActive: true,
             minHeight: minHeight,
             maxHeight: maxHeight
@@ -919,8 +919,8 @@ struct RecordingLifecycleRegressionTests {
         let inactiveHeight = AudioVisualizerBarModel.barHeight(
             for: 8,
             weights: weights,
-            averagePower: 1,
-            peakPower: 1,
+            level: 1,
+            motionAmount: 1,
             isActive: false,
             minHeight: minHeight,
             maxHeight: maxHeight
@@ -928,8 +928,8 @@ struct RecordingLifecycleRegressionTests {
         let invalidIndexHeight = AudioVisualizerBarModel.barHeight(
             for: weights.count,
             weights: weights,
-            averagePower: 1,
-            peakPower: 1,
+            level: 1,
+            motionAmount: 1,
             isActive: true,
             minHeight: minHeight,
             maxHeight: maxHeight
@@ -941,6 +941,380 @@ struct RecordingLifecycleRegressionTests {
         #expect(activeHeight <= maxHeight)
         #expect(inactiveHeight == minHeight)
         #expect(invalidIndexHeight == minHeight)
+    }
+
+    @Test func audioVisualizerBarModelPreservesLocalMotionForActiveInput() {
+        let weights = AudioVisualizerBarModel.barWeights(count: 15)
+        let minHeight = CGFloat(4)
+        let maxHeight = CGFloat(28)
+
+        let firstFrame = weights.indices.map { index in
+            AudioVisualizerBarModel.barHeight(
+                for: index,
+                weights: weights,
+                level: 0.64,
+                motionAmount: 1,
+                isActive: true,
+                minHeight: minHeight,
+                maxHeight: maxHeight,
+                time: 1.0
+            )
+        }
+        let secondFrame = weights.indices.map { index in
+            AudioVisualizerBarModel.barHeight(
+                for: index,
+                weights: weights,
+                level: 0.64,
+                motionAmount: 1,
+                isActive: true,
+                minHeight: minHeight,
+                maxHeight: maxHeight,
+                time: 1.0 + AudioVisualizerBarModel.animationInterval * 3
+            )
+        }
+        let quietFrame = weights.indices.map { index in
+            AudioVisualizerBarModel.barHeight(
+                for: index,
+                weights: weights,
+                level: 0,
+                motionAmount: 1,
+                isActive: true,
+                minHeight: minHeight,
+                maxHeight: maxHeight,
+                time: 1.0
+            )
+        }
+
+        let maxFrameDelta = zip(firstFrame, secondFrame)
+            .map { abs($0 - $1) }
+            .max() ?? 0
+
+        #expect(maxFrameDelta > 1.0)
+        #expect(firstFrame.allSatisfy { $0 >= minHeight && $0 <= maxHeight })
+        #expect(secondFrame.allSatisfy { $0 >= minHeight && $0 <= maxHeight })
+        #expect(quietFrame.allSatisfy { $0 == minHeight })
+    }
+
+    @Test func audioVisualizerMeterKeepsNoiseLikeSilenceStatic() {
+        var state = AudioVisualizerMeterState()
+        let snapshots = (0..<24).map { _ in
+            state.update(averageDb: -45, peakDb: -42)
+        }
+
+        #expect(snapshots.allSatisfy { $0.level == 0 })
+        #expect(snapshots.allSatisfy { $0.motionAmount == 0 })
+        #expect(snapshots.allSatisfy { !$0.isSpeechActive })
+    }
+
+    @Test func audioVisualizerMeterAdaptsToLouderRoomNoiseWithoutAnimating() {
+        let loudRoomProfile = AudioVisualizerMeterProfile(initialNoiseFloorDb: -42)
+        var state = AudioVisualizerMeterState(profile: loudRoomProfile)
+        let snapshots = (0..<20).map { _ in
+            state.update(averageDb: -38, peakDb: -35)
+        }
+
+        #expect(snapshots.allSatisfy { $0.level == 0 })
+        #expect(snapshots.allSatisfy { !$0.isSpeechActive })
+        #expect(state.noiseFloorDb > -43)
+    }
+
+    @Test func audioVisualizerMeterRampsIntoSpeechWithoutASuddenJump() {
+        let profile = AudioVisualizerMeterProfile()
+        var state = AudioVisualizerMeterState(profile: profile)
+
+        for _ in 0..<8 {
+            _ = state.update(averageDb: -45, peakDb: -42)
+        }
+
+        let first = state.update(averageDb: -30, peakDb: -18)
+        let second = state.update(averageDb: -30, peakDb: -18)
+        let third = state.update(averageDb: -30, peakDb: -18)
+
+        #expect(first.isSpeechActive)
+        #expect(first.level <= profile.maximumRisePerSample + 0.0001)
+        #expect(second.level > first.level)
+        #expect(third.level > second.level)
+        #expect(third.level - first.level <= profile.maximumRisePerSample * 2 + 0.0001)
+    }
+
+    @Test func audioVisualizerMeterLearnsStartupLowCrestRoomToneWithoutAnimating() {
+        var state = AudioVisualizerMeterState()
+        let snapshots = (0..<20).map { _ in
+            state.update(averageDb: -44.5, peakDb: -41.5)
+        }
+
+        #expect(snapshots.allSatisfy { !$0.isSpeechActive })
+        #expect(snapshots.allSatisfy { $0.level == 0 })
+        #expect(state.noiseFloorDb > -49)
+    }
+
+    @Test func audioVisualizerMeterLearnsColdStartCandidateWindowRoomToneWithoutAnimating() {
+        var state = AudioVisualizerMeterState()
+        let snapshots = (0..<20).map { _ in
+            state.update(averageDb: -42, peakDb: -39)
+        }
+
+        #expect(snapshots.allSatisfy { !$0.isSpeechActive })
+        #expect(snapshots.allSatisfy { $0.level == 0 })
+        #expect(state.noiseFloorDb > -46)
+    }
+
+    @Test func audioVisualizerMeterDoesNotEatColdStartLowCrestSpeech() {
+        var state = AudioVisualizerMeterState()
+
+        let first = state.update(averageDb: -43.5, peakDb: -40.5)
+        let second = state.update(averageDb: -43, peakDb: -40)
+        let third = state.update(averageDb: -42.75, peakDb: -39.75)
+
+        #expect(!first.isSpeechActive)
+        #expect(!second.isSpeechActive)
+        #expect(third.isSpeechActive)
+        #expect(third.level > 0)
+        #expect(state.noiseFloorDb == AudioVisualizerMeterProfile().initialNoiseFloorDb)
+    }
+
+    @Test func audioVisualizerMeterReleasesColdStartSpeechToRoomTone() {
+        var state = AudioVisualizerMeterState()
+
+        _ = state.update(averageDb: -43.5, peakDb: -40.5)
+        _ = state.update(averageDb: -43, peakDb: -40)
+        _ = state.update(averageDb: -42.75, peakDb: -39.75)
+        let activeSpeech = state.update(averageDb: -43, peakDb: -40)
+        let release = state.update(averageDb: -44.5, peakDb: -41.5)
+        let tail = (0..<24).map { _ in
+            state.update(averageDb: -44.5, peakDb: -41.5)
+        }
+
+        #expect(activeSpeech.isSpeechActive)
+        #expect(!release.isSpeechActive)
+        #expect(release.level > 0)
+        #expect(tail.allSatisfy { !$0.isSpeechActive })
+        #expect(tail.last?.level == 0)
+        #expect(state.noiseFloorDb > -49)
+    }
+
+    @Test func audioVisualizerMeterReleasesColdStartImpulseToCandidateWindowRoomTone() {
+        var state = AudioVisualizerMeterState()
+
+        let impulse = state.update(averageDb: -43, peakDb: -25)
+        let release = state.update(averageDb: -42, peakDb: -39)
+        let tail = (0..<24).map { _ in
+            state.update(averageDb: -42, peakDb: -39)
+        }
+
+        #expect(impulse.isSpeechActive)
+        #expect(!release.isSpeechActive)
+        #expect(release.level > 0)
+        #expect(tail.allSatisfy { !$0.isSpeechActive })
+        #expect(tail.last?.level == 0)
+        #expect(state.noiseFloorDb > -46)
+    }
+
+    @Test func audioVisualizerMeterReleasesColdStartImpulseToRoomTone() {
+        var state = AudioVisualizerMeterState()
+
+        let impulse = state.update(averageDb: -43, peakDb: -25)
+        let release = state.update(averageDb: -44.5, peakDb: -41.5)
+        let tail = (0..<24).map { _ in
+            state.update(averageDb: -44.5, peakDb: -41.5)
+        }
+
+        #expect(impulse.isSpeechActive)
+        #expect(!release.isSpeechActive)
+        #expect(release.level > 0)
+        #expect(tail.allSatisfy { !$0.isSpeechActive })
+        #expect(tail.last?.level == 0)
+        #expect(state.noiseFloorDb > -49)
+    }
+
+    @Test func audioVisualizerMeterReleasesColdStartImpulseToLoudRoomTone() {
+        var state = AudioVisualizerMeterState()
+
+        let impulse = state.update(averageDb: -43, peakDb: -25)
+        let release = state.update(averageDb: -38, peakDb: -35)
+        let tail = (0..<24).map { _ in
+            state.update(averageDb: -38, peakDb: -35)
+        }
+
+        #expect(impulse.isSpeechActive)
+        #expect(!release.isSpeechActive)
+        #expect(release.level > 0)
+        #expect(tail.allSatisfy { !$0.isSpeechActive })
+        #expect(tail.last?.level == 0)
+        #expect(state.noiseFloorDb > -43)
+    }
+
+    @Test func audioVisualizerMeterLearnsStartupLoudLowCrestRoomToneWithoutAnimating() {
+        var state = AudioVisualizerMeterState()
+        let snapshots = (0..<20).map { _ in
+            state.update(averageDb: -38, peakDb: -35)
+        }
+
+        #expect(snapshots.allSatisfy { !$0.isSpeechActive })
+        #expect(snapshots.allSatisfy { $0.level == 0 })
+        #expect(state.noiseFloorDb > -43)
+    }
+
+    @Test func audioVisualizerMeterDoesNotEatLowCrestSpeechAfterNoiseCalibration() {
+        var state = AudioVisualizerMeterState()
+
+        for _ in 0..<20 {
+            _ = state.update(averageDb: -45, peakDb: -42)
+        }
+        let calibratedNoiseFloor = state.noiseFloorDb
+
+        let first = state.update(averageDb: -43, peakDb: -40)
+        let second = state.update(averageDb: -43, peakDb: -40)
+        let third = state.update(averageDb: -43, peakDb: -40)
+
+        #expect(!first.isSpeechActive)
+        #expect(!second.isSpeechActive)
+        #expect(third.isSpeechActive)
+        #expect(third.level > 0)
+        #expect(state.noiseFloorDb == calibratedNoiseFloor)
+    }
+
+    @Test func audioVisualizerMeterRecognizesQuietLowCrestSpeechAfterGateCoalescedNoiseCalibration() {
+        var gate = RecordingAudioMeterPublishGate(minimumDbDelta: 0.75, maximumInterval: 0.20)
+        var state = AudioVisualizerMeterState()
+        var snapshots: [AudioVisualizerMeterSnapshot] = []
+
+        func feed(averageDb: Double, peakDb: Double, at time: TimeInterval) {
+            let meter = AudioMeter(averagePower: averageDb, peakPower: peakDb)
+            guard gate.shouldPublish(meter, at: time) else { return }
+            snapshots.append(state.update(averageDb: averageDb, peakDb: peakDb, at: time))
+        }
+
+        for tick in 0...30 {
+            feed(
+                averageDb: -70,
+                peakDb: -67,
+                at: Double(tick) * AudioVisualizerBarModel.animationInterval
+            )
+        }
+        let quietSnapshotCount = snapshots.count
+        let calibratedNoiseFloor = state.noiseFloorDb
+
+        for tick in 31...45 {
+            feed(
+                averageDb: -62,
+                peakDb: -59,
+                at: Double(tick) * AudioVisualizerBarModel.animationInterval
+            )
+        }
+
+        #expect(quietSnapshotCount < 10)
+        #expect(snapshots.prefix(quietSnapshotCount).allSatisfy { !$0.isSpeechActive })
+        #expect(calibratedNoiseFloor < -66)
+        #expect(snapshots.suffix(from: quietSnapshotCount).contains { $0.isSpeechActive })
+        #expect(snapshots.last?.level ?? 0 > 0)
+    }
+
+    @Test func audioVisualizerMeterRecognizesCompressedSpeechInLoudRoom() {
+        let loudRoomProfile = AudioVisualizerMeterProfile(initialNoiseFloorDb: -44)
+        var state = AudioVisualizerMeterState(profile: loudRoomProfile)
+        for _ in 0..<8 {
+            _ = state.update(averageDb: -44, peakDb: -41)
+        }
+        let first = state.update(averageDb: -36, peakDb: -31)
+        let second = state.update(averageDb: -36, peakDb: -31)
+        let third = state.update(averageDb: -36, peakDb: -31)
+
+        #expect(first.isSpeechActive)
+        #expect(second.isSpeechActive)
+        #expect(third.isSpeechActive)
+        #expect(third.level > 0)
+    }
+
+    @Test func audioVisualizerMeterDoesNotEatQuietRoomLowCrestSpeech() {
+        var state = AudioVisualizerMeterState()
+
+        for _ in 0..<32 {
+            _ = state.update(averageDb: -70, peakDb: -67)
+        }
+        let calibratedNoiseFloor = state.noiseFloorDb
+
+        let first = state.update(averageDb: -62, peakDb: -59)
+        let second = state.update(averageDb: -62, peakDb: -59)
+        let third = state.update(averageDb: -62, peakDb: -59)
+
+        #expect(calibratedNoiseFloor < -66)
+        #expect(calibratedNoiseFloor > -69)
+        #expect(!first.isSpeechActive)
+        #expect(!second.isSpeechActive)
+        #expect(third.isSpeechActive)
+        #expect(third.level > 0)
+        #expect(state.noiseFloorDb == calibratedNoiseFloor)
+    }
+
+    @Test func audioVisualizerMeterNoiseLearningDoesNotChangeVisibleSnapshot() {
+        var state = AudioVisualizerMeterState()
+        let first = state.update(averageDb: -45, peakDb: -42)
+        let floorAfterFirstSample = state.noiseFloorDb
+        let second = state.update(averageDb: -45, peakDb: -42)
+
+        #expect(first == .silent)
+        #expect(second == .silent)
+        #expect(floorAfterFirstSample != state.noiseFloorDb)
+    }
+
+    @Test func audioVisualizerMeterReleasesSpeechGraduallyToSilence() {
+        var state = AudioVisualizerMeterState()
+
+        for _ in 0..<8 {
+            _ = state.update(averageDb: -30, peakDb: -18)
+        }
+        let active = state.update(averageDb: -30, peakDb: -18)
+        let release = state.update(averageDb: -70, peakDb: -67)
+        let silentTail = (0..<48).map { _ in
+            state.update(averageDb: -70, peakDb: -67)
+        }
+
+        #expect(active.level > 0.4)
+        #expect(!release.isSpeechActive)
+        #expect(release.level > 0)
+        #expect(release.level < active.level)
+        #expect(silentTail.last?.level == 0)
+    }
+
+    @Test func audioVisualizerMeterReleaseUsesElapsedTimeWithCoalescedMeterUpdates() {
+        var gate = RecordingAudioMeterPublishGate(minimumDbDelta: 0.75, maximumInterval: 0.20)
+        var state = AudioVisualizerMeterState()
+        var snapshots: [AudioVisualizerMeterSnapshot] = []
+
+        func feed(averageDb: Double, peakDb: Double, at time: TimeInterval) {
+            let meter = AudioMeter(averagePower: averageDb, peakPower: peakDb)
+            guard gate.shouldPublish(meter, at: time) else { return }
+            snapshots.append(state.update(averageDb: averageDb, peakDb: peakDb, at: time))
+        }
+
+        feed(averageDb: -30, peakDb: -18, at: 0)
+        for tick in 1...6 {
+            feed(averageDb: -30, peakDb: -18, at: Double(tick) * AudioVisualizerBarModel.animationInterval)
+        }
+        feed(averageDb: -30, peakDb: -18, at: 0.231)
+        let activeLevel = snapshots.last?.level ?? 0
+
+        feed(averageDb: -70, peakDb: -67, at: 0.264)
+        for tick in 9...40 {
+            feed(averageDb: -70, peakDb: -67, at: Double(tick) * AudioVisualizerBarModel.animationInterval)
+        }
+
+        #expect(activeLevel > 0.3)
+        #expect((snapshots.last?.level ?? 1) == 0)
+    }
+
+    @Test func audioVisualizerMeterPreservesCloseQuietSpeechImpulse() {
+        var state = AudioVisualizerMeterState()
+
+        for _ in 0..<10 {
+            _ = state.update(averageDb: -45, peakDb: -42)
+        }
+        let impulse = state.update(averageDb: -43, peakDb: -25)
+
+        #expect(impulse.isSpeechActive)
+        #expect(impulse.level > 0)
+        #expect(impulse.level < 0.15)
     }
 
     @Test func voiceInkEngineStartsRealtimePreconnectAfterAudioCaptureAndRecordingState() throws {
@@ -959,10 +1333,57 @@ struct RecordingLifecycleRegressionTests {
         #expect(recordingStateSet.lowerBound < preconnectStarted.lowerBound)
     }
 
-    @Test func audioVisualizerDoesNotUseTimelineDrivenRendering() throws {
+    @Test func audioVisualizerUsesOnlyThrottledLocalTimelineRendering() throws {
         let source = try readProjectSource("VoiceInk/Views/Recorder/AudioVisualizerView.swift")
 
-        #expect(!source.contains("TimelineView"))
+        #expect(source.contains("if visualMeter.motionAmount > 0.01"))
+        #expect(source.contains("TimelineView(.animation(minimumInterval: AudioVisualizerBarModel.animationInterval))"))
+        #expect(source.contains("static let animationInterval: TimeInterval = 1.0 / 30.0"))
+        #expect(source.contains("if nextVisualMeter != visualMeter"))
+        #expect(source.contains("AudioVisualizerMeterStore"))
+        #expect(!source.contains("let noiseFloorDb: Double"))
+        #expect(!source.contains("minimumInterval: 0.016"))
+    }
+
+    @Test func recorderViewsObserveAudioMeterOnlyInsideStatusDisplay() throws {
+        let notchSource = try readProjectSource("VoiceInk/Views/Recorder/NotchRecorderView.swift")
+        let miniSource = try readProjectSource("VoiceInk/Views/Recorder/MiniRecorderView.swift")
+        let componentsSource = try readProjectSource("VoiceInk/Views/Recorder/RecorderComponents.swift")
+
+        #expect(!notchSource.contains("@ObservedObject var recorder: Recorder"))
+        #expect(!miniSource.contains("@ObservedObject var recorder: Recorder"))
+        #expect(componentsSource.contains("@ObservedObject var recorder: Recorder"))
+        #expect(!notchSource.contains("audioMeter: recorder.audioMeter"))
+        #expect(!miniSource.contains("audioMeter: recorder.audioMeter"))
+    }
+
+    @Test func recorderStatusDisplayKeepsOneVisualizerIdentityAcrossStartingAndRecording() throws {
+        let componentsSource = try readProjectSource("VoiceInk/Views/Recorder/RecorderComponents.swift")
+        let visualizerBranchCount = componentsSource
+            .components(separatedBy: "AudioVisualizer(audioMeter: recorder.audioMeter")
+            .count - 1
+
+        #expect(componentsSource.contains("if currentState == .starting || currentState == .recording"))
+        #expect(visualizerBranchCount == 1)
+    }
+
+    @Test func audioMeterPublishGateCoalescesStableSilenceButPublishesChanges() {
+        var gate = RecordingAudioMeterPublishGate(minimumDbDelta: 0.75, maximumInterval: 0.20)
+        let stableSilence = AudioMeter(averagePower: -45, peakPower: -42)
+
+        let firstPublish = gate.shouldPublish(stableSilence, at: 0)
+        #expect(firstPublish)
+
+        for tick in 1...5 {
+            let shouldPublishStableTick = gate.shouldPublish(stableSilence, at: Double(tick) * 0.033)
+            #expect(!shouldPublishStableTick)
+        }
+
+        let intervalPublish = gate.shouldPublish(stableSilence, at: 0.231)
+        let changedMeterPublish = gate.shouldPublish(AudioMeter(averagePower: -43.9, peakPower: -40.9), at: 0.264)
+
+        #expect(intervalPublish)
+        #expect(changedMeterPublish)
     }
 }
 

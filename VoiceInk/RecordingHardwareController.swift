@@ -97,6 +97,49 @@ final class RecordingHardwareStartCoordinator: @unchecked Sendable {
     }
 }
 
+struct RecordingAudioMeterPublishGate: Equatable {
+    let minimumDbDelta: Double
+    let maximumInterval: TimeInterval
+
+    private var lastPublishedMeter: AudioMeter?
+    private var lastPublishedTime: TimeInterval?
+
+    init(minimumDbDelta: Double = 0.75, maximumInterval: TimeInterval = 0.20) {
+        self.minimumDbDelta = minimumDbDelta
+        self.maximumInterval = maximumInterval
+    }
+
+    mutating func shouldPublish(_ meter: AudioMeter, at time: TimeInterval) -> Bool {
+        guard let lastPublishedMeter, let lastPublishedTime else {
+            recordPublish(meter, at: time)
+            return true
+        }
+
+        let averageDelta = abs(meter.averagePower - lastPublishedMeter.averagePower)
+        let peakDelta = abs(meter.peakPower - lastPublishedMeter.peakPower)
+        let elapsed = time - lastPublishedTime
+        let shouldPublish = averageDelta >= minimumDbDelta
+            || peakDelta >= minimumDbDelta
+            || elapsed < 0
+            || elapsed >= maximumInterval
+
+        if shouldPublish {
+            recordPublish(meter, at: time)
+        }
+        return shouldPublish
+    }
+
+    mutating func reset() {
+        lastPublishedMeter = nil
+        lastPublishedTime = nil
+    }
+
+    private mutating func recordPublish(_ meter: AudioMeter, at time: TimeInterval) {
+        lastPublishedMeter = meter
+        lastPublishedTime = time
+    }
+}
+
 final class RecordingHardwareController: @unchecked Sendable {
     private let logger = Logger(subsystem: "com.metrovoc.voiceink", category: "RecordingHardwareController")
     private let deviceResolver = RecordingInputDeviceResolver()
@@ -121,14 +164,8 @@ final class RecordingHardwareController: @unchecked Sendable {
     private let audioMeterTimerLock = NSLock()
     private var audioMeterUpdateTimer: DispatchSourceTimer?
     private var audioMeterStopRequestGeneration: UInt64 = 0
-    private var smoothedAverage: Float = 0
-    private var smoothedPeak: Float = 0
-    private var lastAudioMeterPublishTime: TimeInterval = 0
-    private var lastPublishedAudioAverage: Double = 0
-    private var lastPublishedAudioPeak: Double = 0
     private var audioMeterPublishGeneration: UInt64 = 0
-    private let audioMeterPublishInterval: TimeInterval = 1.0 / 30.0
-    private let audioMeterPublishDelta: Double = 0.015
+    private var audioMeterPublishGate = RecordingAudioMeterPublishGate()
 
     deinit {
         stopAudioMeterTimer()
@@ -238,7 +275,6 @@ final class RecordingHardwareController: @unchecked Sendable {
                         if self.startCoordinator.isActive(token) {
                             self.deviceManager.isRecordingActive = false
                             self.stopAudioMeterTimer()
-                            self.resetMeters()
                             self.startCoordinator.clear(token)
                         }
                         #if DEBUG
@@ -260,8 +296,7 @@ final class RecordingHardwareController: @unchecked Sendable {
             enqueueStopRecording(onStopped: continuation.resume)
         }
 
-        resetMeters()
-        publishAudioMeter(AudioMeter(averagePower: 0, peakPower: 0))
+        publishAudioMeter(AudioMeter(averagePower: -160, peakPower: -160))
         warmUpForCurrentDevice(reason: "post-stop")
     }
 
@@ -436,48 +471,15 @@ final class RecordingHardwareController: @unchecked Sendable {
     private func updateAudioMeter(generation: UInt64) {
         guard let recorder = recorderSnapshot() else { return }
 
-        let averagePower = recorder.averagePower
-        let peakPower = recorder.peakPower
-        let minVisibleDb: Float = -60.0
-        let maxVisibleDb: Float = 0.0
-
-        let normalizedAverage: Float
-        if averagePower < minVisibleDb {
-            normalizedAverage = 0.0
-        } else if averagePower >= maxVisibleDb {
-            normalizedAverage = 1.0
-        } else {
-            normalizedAverage = (averagePower - minVisibleDb) / (maxVisibleDb - minVisibleDb)
-        }
-
-        let normalizedPeak: Float
-        if peakPower < minVisibleDb {
-            normalizedPeak = 0.0
-        } else if peakPower >= maxVisibleDb {
-            normalizedPeak = 1.0
-        } else {
-            normalizedPeak = (peakPower - minVisibleDb) / (maxVisibleDb - minVisibleDb)
-        }
+        let newAudioMeter = AudioMeter(
+            averagePower: Double(recorder.averagePower),
+            peakPower: Double(recorder.peakPower)
+        )
+        let now = ProcessInfo.processInfo.systemUptime
 
         audioMeterPublishLock.lock()
-        smoothedAverage = smoothedAverage * 0.6 + normalizedAverage * 0.4
-        smoothedPeak = smoothedPeak * 0.6 + normalizedPeak * 0.4
-        let newAudioMeter = AudioMeter(averagePower: Double(smoothedAverage), peakPower: Double(smoothedPeak))
-
-        let now = ProcessInfo.processInfo.systemUptime
-        guard generation == audioMeterPublishGeneration else {
-            audioMeterPublishLock.unlock()
-            return
-        }
-        let averageDelta = abs(newAudioMeter.averagePower - lastPublishedAudioAverage)
-        let peakDelta = abs(newAudioMeter.peakPower - lastPublishedAudioPeak)
-        let shouldPublish = now - lastAudioMeterPublishTime >= audioMeterPublishInterval
-            && (averageDelta >= audioMeterPublishDelta || peakDelta >= audioMeterPublishDelta)
-        if shouldPublish {
-            lastAudioMeterPublishTime = now
-            lastPublishedAudioAverage = newAudioMeter.averagePower
-            lastPublishedAudioPeak = newAudioMeter.peakPower
-        }
+        let shouldPublish = generation == audioMeterPublishGeneration
+            && audioMeterPublishGate.shouldPublish(newAudioMeter, at: now)
         audioMeterPublishLock.unlock()
 
         guard shouldPublish else { return }
@@ -487,19 +489,10 @@ final class RecordingHardwareController: @unchecked Sendable {
     private func resetAudioMeterPublishingState() -> UInt64 {
         audioMeterPublishLock.lock()
         audioMeterPublishGeneration &+= 1
-        lastAudioMeterPublishTime = 0
-        lastPublishedAudioAverage = 0
-        lastPublishedAudioPeak = 0
+        audioMeterPublishGate.reset()
         let generation = audioMeterPublishGeneration
         audioMeterPublishLock.unlock()
         return generation
-    }
-
-    private func resetMeters() {
-        audioMeterPublishLock.lock()
-        smoothedAverage = 0
-        smoothedPeak = 0
-        audioMeterPublishLock.unlock()
     }
 
     private func publishAudioMeter(_ audioMeter: AudioMeter) {
