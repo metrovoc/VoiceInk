@@ -5,10 +5,10 @@ struct AudioCleanupSettingsView: View {
     @Environment(\.modelContext) private var modelContext
 
     // Audio cleanup settings
-    @AppStorage("IsTranscriptionCleanupEnabled") private var isTranscriptionCleanupEnabled = false
-    @AppStorage("TranscriptionRetentionMinutes") private var transcriptionRetentionMinutes = 24 * 60
-    @AppStorage("IsAudioCleanupEnabled") private var isAudioCleanupEnabled = false
-    @AppStorage("AudioRetentionPeriod") private var audioRetentionPeriod = 7
+    @AppStorage(CleanupSettingsKeys.isTranscriptionCleanupEnabled) private var isTranscriptionCleanupEnabled = false
+    @AppStorage(CleanupSettingsKeys.transcriptionRetentionMinutes) private var transcriptionRetentionMinutes = 24 * 60
+    @AppStorage(CleanupSettingsKeys.isAudioCleanupEnabled) private var isAudioCleanupEnabled = false
+    @AppStorage(CleanupSettingsKeys.audioRetentionPeriod) private var audioRetentionPeriod = 7
     @State private var isPerformingCleanup = false
     @State private var isShowingConfirmation = false
     @State private var cleanupInfo: (fileCount: Int, totalSize: Int64, transcriptions: [Transcription]) = (0, 0, [])
@@ -37,6 +37,7 @@ struct AudioCleanupSettingsView: View {
             }
             .onChange(of: isTranscriptionCleanupEnabled) { _, newValue in
                 if newValue {
+                    isAudioCleanupEnabled = false
                     AudioCleanupManager.shared.stopAutomaticCleanup()
                 } else if isAudioCleanupEnabled {
                     AudioCleanupManager.shared.startAutomaticCleanup(modelContext: modelContext)
@@ -85,6 +86,21 @@ struct AudioCleanupSettingsView: View {
                         Text(String(format: String(localized: "Deleted files: %lld. Failed: %lld."), Int64(cleanupResult.deletedCount), Int64(cleanupResult.errorCount)))
                     } else {
                         Text(String(localized: "Deleted \(cleanupResult.deletedCount) audio files."))
+                    }
+                }
+                .onChange(of: isAudioCleanupEnabled) { _, newValue in
+                    guard !isTranscriptionCleanupEnabled else {
+                        if newValue {
+                            isAudioCleanupEnabled = false
+                        }
+                        AudioCleanupManager.shared.stopAutomaticCleanup()
+                        return
+                    }
+
+                    if newValue {
+                        AudioCleanupManager.shared.startAutomaticCleanup(modelContext: modelContext)
+                    } else {
+                        AudioCleanupManager.shared.stopAutomaticCleanup()
                     }
                 }
             }

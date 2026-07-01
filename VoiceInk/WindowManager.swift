@@ -2,6 +2,23 @@ import SwiftUI
 import AppKit
 import OSLog
 
+enum MainWindowLifecyclePolicy {
+    static func shouldHideInsteadOfClose(
+        windowIdentifier: NSUserInterfaceItemIdentifier?,
+        mainIdentifier: NSUserInterfaceItemIdentifier
+    ) -> Bool {
+        windowIdentifier == mainIdentifier
+    }
+
+    static func shouldRestoreAccessoryPolicy(
+        isMenuBarOnly: Bool,
+        hasVisibleNormalWindows: Bool,
+        currentPolicy: NSApplication.ActivationPolicy
+    ) -> Bool {
+        isMenuBarOnly && !hasVisibleNormalWindows && currentPolicy != .accessory
+    }
+}
+
 class WindowManager: NSObject {
     static let shared = WindowManager()
 
@@ -9,7 +26,7 @@ class WindowManager: NSObject {
     private static let mainWindowAutosaveName = NSWindow.FrameAutosaveName("VoiceInkMainWindowFrame")
 
     private let logger = Logger(subsystem: "com.metrovoc.voiceink", category: "WindowManager")
-    private weak var mainWindow: NSWindow?
+    private var mainWindow: NSWindow?
     private var didApplyInitialPlacement = false
 
     private override init() {
@@ -53,7 +70,11 @@ class WindowManager: NSObject {
         guard let window = resolveMainWindow() else {
             return nil
         }
-        
+
+        if window.isMiniaturized {
+            window.deminiaturize(nil)
+        }
+
         window.makeKeyAndOrderFront(nil)
         NSApplication.shared.activate(ignoringOtherApps: true)
         return window
@@ -64,6 +85,7 @@ class WindowManager: NSObject {
             return
         }
         window.orderOut(nil)
+        restoreAccessoryPolicyIfNeededAfterWindowHide()
     }
     
     func currentMainWindow() -> NSWindow? {
@@ -104,9 +126,39 @@ class WindowManager: NSObject {
         logger.error("resolveMainWindow: FAILED — no window found with main identifier. Total windows: \(NSApplication.shared.windows.count, privacy: .public), identifiers: \(windowIDs, privacy: .public)")
         return nil
     }
+
+    private func restoreAccessoryPolicyIfNeededAfterWindowHide() {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+            let hasVisibleWindows = NSApplication.shared.windows.contains {
+                $0.isVisible && $0.level == .normal && !$0.styleMask.contains(.nonactivatingPanel)
+            }
+
+            if MainWindowLifecyclePolicy.shouldRestoreAccessoryPolicy(
+                isMenuBarOnly: UserDefaults.standard.bool(forKey: "IsMenuBarOnly"),
+                hasVisibleNormalWindows: hasVisibleWindows,
+                currentPolicy: NSApplication.shared.activationPolicy()
+            ) {
+                NSApplication.shared.setActivationPolicy(.accessory)
+            }
+        }
+    }
 }
 
 extension WindowManager: NSWindowDelegate {
+    func windowShouldClose(_ sender: NSWindow) -> Bool {
+        guard MainWindowLifecyclePolicy.shouldHideInsteadOfClose(
+            windowIdentifier: sender.identifier,
+            mainIdentifier: Self.mainWindowIdentifier
+        ) else {
+            return true
+        }
+
+        logger.notice("windowShouldClose: hiding main window instead of closing")
+        sender.orderOut(nil)
+        restoreAccessoryPolicyIfNeededAfterWindowHide()
+        return false
+    }
+
     func windowWillClose(_ notification: Notification) {
         guard let window = notification.object as? NSWindow else { return }
         if window.identifier == Self.mainWindowIdentifier {

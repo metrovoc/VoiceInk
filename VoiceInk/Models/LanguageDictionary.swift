@@ -88,9 +88,7 @@ enum LanguageDictionary {
             guard let codes = cloudProvider.languageCodes else {
                 return all
             }
-            var filtered = all.filter { codes.contains($0.key) }
-            if cloudProvider.includesAutoDetect { filtered["auto"] = "Auto-detect" }
-            return filtered
+            return forCodes(codes, includesAutoDetect: cloudProvider.includesAutoDetect)
         }
 
         switch provider {
@@ -161,6 +159,14 @@ enum LanguageDictionary {
         all.filter { codes.contains($0.key) }
     }
 
+    static func forCodes(_ codes: [String], includesAutoDetect: Bool = false) -> [String: String] {
+        var filtered = all.filter { codes.contains($0.key) }
+        if includesAutoDetect {
+            filtered["auto"] = "Auto-detect"
+        }
+        return filtered
+    }
+
     // Apple Native Speech languages in BCP-47 format.
     // Queried from SpeechTranscriber.supportedLocales on macOS 26.4.
     static let appleNative: [String: String] = [
@@ -218,6 +224,11 @@ enum LanguageDictionary {
         "de_ch": "Swiss German",
         "el": "Greek",
         "en": "English",
+        "en-AU": "English (Australia)",
+        "en-GB": "English (United Kingdom)",
+        "en-IN": "English (India)",
+        "en-NZ": "English (New Zealand)",
+        "en-US": "English (United States)",
         "en_au": "Australian English",
         "en_uk": "British English",
         "en_us": "US English",
