@@ -1,24 +1,19 @@
 import Foundation
-import SwiftData
 import LLMkit
 
 /// Cartesia Ink 2 streaming provider wrapping `LLMkit.CartesiaStreamingClient`.
-final class CartesiaStreamingProvider: StreamingTranscriptionProvider {
+final class CartesiaStreamingProvider: StreamingTranscriptionProvider, @unchecked Sendable {
 
     private let client = LLMkit.CartesiaStreamingClient()
-    private var eventsContinuation: AsyncStream<StreamingTranscriptionEvent>.Continuation?
+    private var eventsContinuation: StreamingProviderEventRelay?
     private var forwardingTask: Task<Void, Never>?
-    private let finalizationLock = NSLock()
-    private var didRequestFinalization = false
-    private let modelContext: ModelContext
 
     private(set) var transcriptionEvents: AsyncStream<StreamingTranscriptionEvent>
 
-    init(modelContext: ModelContext) {
-        self.modelContext = modelContext
-        var continuation: AsyncStream<StreamingTranscriptionEvent>.Continuation!
-        transcriptionEvents = AsyncStream { continuation = $0 }
-        eventsContinuation = continuation
+    init() {
+        let relay = StreamingProviderEventRelay()
+        transcriptionEvents = relay.stream
+        eventsContinuation = relay
     }
 
     deinit {
@@ -32,7 +27,6 @@ final class CartesiaStreamingProvider: StreamingTranscriptionProvider {
         }
 
         forwardingTask?.cancel()
-        setFinalizationRequested(false)
         startEventForwarding()
 
         do {
@@ -53,7 +47,6 @@ final class CartesiaStreamingProvider: StreamingTranscriptionProvider {
     }
 
     func commit() async throws {
-        setFinalizationRequested(true)
         do {
             try await client.commit()
         } catch {
@@ -73,12 +66,7 @@ final class CartesiaStreamingProvider: StreamingTranscriptionProvider {
     private func startEventForwarding() {
         forwardingTask = Task { [weak self] in
             guard let self else { return }
-            defer {
-                if self.isFinalizationRequested {
-                    self.eventsContinuation?.yield(.committed(text: ""))
-                }
-                self.eventsContinuation?.finish()
-            }
+            defer { self.eventsContinuation?.finish() }
 
             for await event in self.client.transcriptionEvents {
                 switch event {
@@ -88,23 +76,13 @@ final class CartesiaStreamingProvider: StreamingTranscriptionProvider {
                     self.eventsContinuation?.yield(.partial(text: text))
                 case .committed(let text):
                     self.eventsContinuation?.yield(.committed(text: text))
+                case .finalized:
+                    self.eventsContinuation?.yield(.finalized)
                 case .error(let message):
                     self.eventsContinuation?.yield(.error(StreamingTranscriptionError.serverError(message)))
                 }
             }
         }
-    }
-
-    private var isFinalizationRequested: Bool {
-        finalizationLock.lock()
-        defer { finalizationLock.unlock() }
-        return didRequestFinalization
-    }
-
-    private func setFinalizationRequested(_ value: Bool) {
-        finalizationLock.lock()
-        didRequestFinalization = value
-        finalizationLock.unlock()
     }
 
     private func mapError(_ error: Error) -> Error {
@@ -117,7 +95,7 @@ final class CartesiaStreamingProvider: StreamingTranscriptionProvider {
         case .networkError(let detail):
             return StreamingTranscriptionError.connectionFailed(detail)
         default:
-            return StreamingTranscriptionError.serverError(llmError.localizedDescription ?? "Unknown error")
+            return StreamingTranscriptionError.serverError(llmError.localizedDescription)
         }
     }
 }

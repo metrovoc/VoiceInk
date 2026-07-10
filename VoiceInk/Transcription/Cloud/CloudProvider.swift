@@ -1,7 +1,6 @@
 import Foundation
-import SwiftData
 
-protocol CloudProvider {
+protocol CloudProvider: Sendable {
     var modelProvider: ModelProvider { get }
     var providerKey: String { get }
     var languageCodes: [String]? { get }
@@ -9,14 +8,17 @@ protocol CloudProvider {
     var models: [CloudModel] { get }
     /// True when the provider has no batch HTTP endpoint and requires streaming for all transcription.
     var isStreamingOnly: Bool { get }
+    /// True only for streaming APIs that accept VoiceInk vocabulary hints.
+    var usesStreamingVocabulary: Bool { get }
 
     func transcribe(audioData: Data, fileName: String, apiKey: String, model: String, language: String?, prompt: String?, customVocabulary: [String]) async throws -> String
-    func makeStreamingProvider(modelContext: ModelContext) -> (any StreamingTranscriptionProvider)?
+    func makeStreamingProvider(customVocabulary: [String]) -> (any StreamingTranscriptionProvider)?
     func verifyAPIKey(_ key: String) async -> (isValid: Bool, errorMessage: String?)
 }
 
 extension CloudProvider {
     var isStreamingOnly: Bool { false }
+    var usesStreamingVocabulary: Bool { false }
 
     /// Streaming-only providers inherit this and get a clear error if batch is somehow attempted.
     /// Providers that support batch transcription override this with their real implementation.
@@ -41,5 +43,9 @@ enum CloudProviderRegistry {
 
     static func provider(for modelProvider: ModelProvider) -> (any CloudProvider)? {
         allProviders.first { $0.modelProvider == modelProvider }
+    }
+
+    static func usesStreamingVocabulary(for modelProvider: ModelProvider) -> Bool {
+        provider(for: modelProvider)?.usesStreamingVocabulary == true
     }
 }

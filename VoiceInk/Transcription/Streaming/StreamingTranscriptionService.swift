@@ -1,238 +1,239 @@
 import Foundation
 import SwiftData
-import os
 
-/// Sendable source that bridges audio chunks from any thread into an AsyncStream.
-private final class AudioChunkSource: @unchecked Sendable {
-    enum EnqueueResult {
-        case enqueued
-        case enqueuedDroppingOldest(Int)
-        case terminated
+/// The single cadence gate between provider events and UI publication. Event
+/// reduction remains unthrottled inside `StreamingTranscriptionCore`; only
+/// immutable snapshots crossing to MainActor are coalesced.
+final class StreamingPartialEventCoalescer: @unchecked Sendable {
+    private struct Payload: @unchecked Sendable {
+        let snapshot: StreamingTranscriptSnapshot?
+        let legacyText: String
     }
 
-    let stream: AsyncStream<Data>
-    private let continuation: AsyncStream<Data>.Continuation
+    /// Mutable lock-owned batches avoid repeatedly copying an ever-growing
+    /// `appendedSegments` array. The accumulator is moved out atomically, then
+    /// materialized exactly once off-lock for immutable MainActor delivery.
+    private struct PendingAccumulator {
+        var latestRevision: UInt64?
+        var segmentBatches: [[StreamingTranscriptSegment]] = []
+        var segmentCount = 0
+        var latestPartial: String?
+        var latestLegacyText = ""
 
-    init(maxBufferedChunks: Int) {
-        let (stream, continuation) = AsyncStream.makeStream(
-            of: Data.self,
-            bufferingPolicy: .bufferingNewest(maxBufferedChunks)
-        )
-        self.stream = stream
-        self.continuation = continuation
-    }
+        init(_ payload: Payload) {
+            merge(payload)
+        }
 
-    deinit {
-        continuation.finish()
-    }
+        mutating func merge(_ payload: Payload) {
+            latestLegacyText = payload.legacyText
+            guard let snapshot = payload.snapshot else {
+                latestRevision = nil
+                segmentBatches.removeAll(keepingCapacity: true)
+                segmentCount = 0
+                latestPartial = nil
+                return
+            }
 
-    @discardableResult
-    func send(_ data: Data) -> EnqueueResult {
-        switch continuation.yield(data) {
-        case .enqueued:
-            return .enqueued
-        case .dropped(let droppedData):
-            return .enqueuedDroppingOldest(droppedData.count)
-        case .terminated:
-            return .terminated
-        @unknown default:
-            return .terminated
+            latestRevision = snapshot.revision
+            if !snapshot.appendedSegments.isEmpty {
+                segmentBatches.append(snapshot.appendedSegments)
+                segmentCount += snapshot.appendedSegments.count
+            }
+            latestPartial = snapshot.partial
+        }
+
+        func materialize() -> Payload {
+            guard let latestRevision else {
+                return Payload(snapshot: nil, legacyText: latestLegacyText)
+            }
+
+            var segments: [StreamingTranscriptSegment] = []
+            segments.reserveCapacity(segmentCount)
+            for batch in segmentBatches {
+                segments.append(contentsOf: batch)
+            }
+            return Payload(
+                snapshot: StreamingTranscriptSnapshot(
+                    revision: latestRevision,
+                    appendedSegments: segments,
+                    partial: latestPartial
+                ),
+                legacyText: latestLegacyText
+            )
         }
     }
 
-    func finish() {
-        continuation.finish()
-    }
-}
-
-private final class StreamingMetrics: @unchecked Sendable {
-    private let lock = NSLock()
-    private var receivedChunks = 0
-    private var receivedBytes = 0
-    private var sentChunks = 0
-    private var sentBytes = 0
-    private var droppedChunks = 0
-    private var droppedBytes = 0
-
-    func reset() {
-        lock.lock()
-        receivedChunks = 0
-        receivedBytes = 0
-        sentChunks = 0
-        sentBytes = 0
-        droppedChunks = 0
-        droppedBytes = 0
-        lock.unlock()
+    struct MetricsSnapshot: Sendable, Equatable {
+        let submittedSegments: Int
+        let materializedSegments: Int
+        let pendingSegments: Int
+        let maximumPendingSegments: Int
+        let deliveryCount: Int
+        let workerStartCount: Int
     }
 
-    func recordReceived(_ byteCount: Int) {
-        lock.lock()
-        receivedChunks += 1
-        receivedBytes += byteCount
-        lock.unlock()
-    }
-
-    func recordSent(_ byteCount: Int) {
-        lock.lock()
-        sentChunks += 1
-        sentBytes += byteCount
-        lock.unlock()
-    }
-
-    func recordDropped(_ byteCount: Int) {
-        lock.lock()
-        droppedChunks += 1
-        droppedBytes += byteCount
-        lock.unlock()
-    }
-
-    func snapshot() -> (receivedChunks: Int, receivedBytes: Int, sentChunks: Int, sentBytes: Int, droppedChunks: Int, droppedBytes: Int) {
-        lock.lock()
-        defer { lock.unlock() }
-        return (receivedChunks, receivedBytes, sentChunks, sentBytes, droppedChunks, droppedBytes)
-    }
-}
-
-private final class StreamingFailureState: @unchecked Sendable {
-    private let lock = NSLock()
-    private var error: Error?
-
-    func reset() {
-        lock.lock()
-        error = nil
-        lock.unlock()
-    }
-
-    @discardableResult
-    func record(_ error: Error) -> Bool {
-        lock.lock()
-        defer { lock.unlock() }
-        guard self.error == nil else { return false }
-        self.error = error
-        return true
-    }
-
-    func current() -> Error? {
-        lock.lock()
-        defer { lock.unlock() }
-        return error
-    }
-}
-
-private final class RealtimeTranscriptionActivity {
-    private var token: NSObjectProtocol?
-
-    func begin(reason: String) {
-        guard token == nil else { return }
-        token = ProcessInfo.processInfo.beginActivity(
-            options: [.userInitiated, .latencyCritical],
-            reason: reason
-        )
-    }
-
-    func end() {
-        guard let token else { return }
-        ProcessInfo.processInfo.endActivity(token)
-        self.token = nil
-    }
-}
-
-final class StreamingPartialEventCoalescer: @unchecked Sendable {
     private let lock = NSLock()
     private let interval: TimeInterval
-    private var pendingText: String?
+    private var pendingAccumulator: PendingAccumulator?
     private var lastEmitTime: TimeInterval = 0
-    private var scheduledTask: Task<Void, Never>?
+    private var workerTask: Task<Void, Never>?
     private var generation: UInt64 = 0
+    private var submittedSegments = 0
+    private var materializedSegments = 0
+    private var maximumPendingSegments = 0
+    private var deliveryCount = 0
+    private var workerStartCount = 0
 
-    init(interval: TimeInterval = 0.1) {
+    init(interval: TimeInterval = 0.040) {
         self.interval = interval
     }
 
-    func submit(_ text: String, emit: @escaping @MainActor (String) -> Void) {
-        let now = ProcessInfo.processInfo.systemUptime
-
-        lock.lock()
-        let elapsed = now - lastEmitTime
-        if elapsed >= interval && scheduledTask == nil {
-            lastEmitTime = now
-            pendingText = nil
-            let currentGeneration = generation
-            lock.unlock()
-            Task { [weak self] in
-                guard let coalescer = self,
-                      coalescer.isCurrentGeneration(currentGeneration) else {
-                    return
-                }
-                await MainActor.run {
-                    guard coalescer.isCurrentGeneration(currentGeneration) else {
-                        return
-                    }
-                    emit(text)
-                }
-            }
-            return
+    /// Compatibility overload retained for focused coalescer tests and legacy
+    /// consumers. The production core uses the structured snapshot overload.
+    func submit(
+        _ text: String,
+        emit: @escaping @MainActor @Sendable (String) -> Void
+    ) {
+        submit(Payload(snapshot: nil, legacyText: text)) { payload in
+            emit(payload.legacyText)
         }
+    }
 
-        pendingText = text
-        guard scheduledTask == nil else {
-            lock.unlock()
-            return
+    func submit(
+        snapshot: StreamingTranscriptSnapshot,
+        legacyText: String,
+        emit: @escaping @MainActor @Sendable (StreamingTranscriptSnapshot, String) -> Void
+    ) {
+        submit(Payload(snapshot: snapshot, legacyText: legacyText)) { payload in
+            guard let snapshot = payload.snapshot else { return }
+            emit(snapshot, payload.legacyText)
         }
-
-        let currentGeneration = generation
-        let delay = UInt64(max(0, interval - elapsed) * 1_000_000_000)
-        scheduledTask = Task { [weak self] in
-            do {
-                try await Task.sleep(nanoseconds: delay)
-            } catch {
-                return
-            }
-
-            guard let self,
-                  let text = self.takePendingText(generation: currentGeneration) else {
-                return
-            }
-
-            guard self.isCurrentGeneration(currentGeneration) else {
-                return
-            }
-            await MainActor.run {
-                guard self.isCurrentGeneration(currentGeneration) else {
-                    return
-                }
-                emit(text)
-            }
-        }
-        lock.unlock()
     }
 
     func cancel() {
         lock.lock()
         generation &+= 1
-        pendingText = nil
-        scheduledTask?.cancel()
-        scheduledTask = nil
+        pendingAccumulator = nil
+        workerTask?.cancel()
+        workerTask = nil
         lastEmitTime = 0
         lock.unlock()
     }
 
-    private func takePendingText(generation expectedGeneration: UInt64) -> String? {
+    var metricsSnapshot: MetricsSnapshot {
         lock.lock()
         defer { lock.unlock() }
+        return MetricsSnapshot(
+            submittedSegments: submittedSegments,
+            materializedSegments: materializedSegments,
+            pendingSegments: pendingAccumulator?.segmentCount ?? 0,
+            maximumPendingSegments: maximumPendingSegments,
+            deliveryCount: deliveryCount,
+            workerStartCount: workerStartCount
+        )
+    }
 
-        guard generation == expectedGeneration else {
-            return nil
+    private func submit(
+        _ payload: Payload,
+        emit: @escaping @MainActor @Sendable (Payload) -> Void
+    ) {
+        lock.lock()
+        let appendedCount = payload.snapshot?.appendedSegments.count ?? 0
+        submittedSegments += appendedCount
+        if pendingAccumulator == nil {
+            pendingAccumulator = PendingAccumulator(payload)
+        } else {
+            pendingAccumulator?.merge(payload)
+        }
+        maximumPendingSegments = max(
+            maximumPendingSegments,
+            pendingAccumulator?.segmentCount ?? 0
+        )
+        guard workerTask == nil else {
+            lock.unlock()
+            return
         }
 
-        scheduledTask = nil
-        guard let text = pendingText else {
+        let currentGeneration = generation
+        let task = Task { [weak self] in
+            guard let self else { return }
+            await self.runWorker(generation: currentGeneration, emit: emit)
+        }
+        workerTask = task
+        workerStartCount += 1
+        lock.unlock()
+    }
+
+    /// One worker owns both the cadence wait and MainActor delivery. While the
+    /// main actor is busy, producers only replace `pendingPayload`; no extra
+    /// MainActor jobs can accumulate.
+    private func runWorker(
+        generation expectedGeneration: UInt64,
+        emit: @escaping @MainActor @Sendable (Payload) -> Void
+    ) async {
+        while !Task.isCancelled {
+            guard let delay = workerDelay(generation: expectedGeneration) else { return }
+
+            if delay > 0 {
+                do {
+                    try await Task.sleep(nanoseconds: delay)
+                } catch {
+                    return
+                }
+            }
+
+            guard let accumulator = takePendingAccumulator(
+                generation: expectedGeneration
+            ) else { return }
+            let payload = accumulator.materialize()
+            recordMaterialization(segmentCount: accumulator.segmentCount)
+
+            guard isCurrentGeneration(expectedGeneration) else { return }
+            await MainActor.run {
+                guard self.isCurrentGeneration(expectedGeneration) else { return }
+                emit(payload)
+            }
+
+            guard completeDelivery(generation: expectedGeneration) else { return }
+        }
+    }
+
+    private func workerDelay(generation expectedGeneration: UInt64) -> UInt64? {
+        lock.lock()
+        defer { lock.unlock() }
+        guard generation == expectedGeneration, pendingAccumulator != nil else {
+            if generation == expectedGeneration { workerTask = nil }
             return nil
         }
+        let elapsed = ProcessInfo.processInfo.systemUptime - lastEmitTime
+        return UInt64(max(0, interval - elapsed) * 1_000_000_000)
+    }
 
-        pendingText = nil
+    private func takePendingAccumulator(
+        generation expectedGeneration: UInt64
+    ) -> PendingAccumulator? {
+        lock.lock()
+        defer { lock.unlock() }
+        guard generation == expectedGeneration,
+              let accumulator = pendingAccumulator else {
+            if generation == expectedGeneration { workerTask = nil }
+            return nil
+        }
+        pendingAccumulator = nil
+        return accumulator
+    }
+
+    private func completeDelivery(generation expectedGeneration: UInt64) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        guard generation == expectedGeneration else { return false }
+        deliveryCount += 1
         lastEmitTime = ProcessInfo.processInfo.systemUptime
-        return text
+        guard pendingAccumulator != nil else {
+            workerTask = nil
+            return false
+        }
+        return true
     }
 
     private func isCurrentGeneration(_ expectedGeneration: UInt64) -> Bool {
@@ -240,10 +241,16 @@ final class StreamingPartialEventCoalescer: @unchecked Sendable {
         defer { lock.unlock() }
         return generation == expectedGeneration
     }
+
+    private func recordMaterialization(segmentCount: Int) {
+        lock.lock()
+        materializedSegments += segmentCount
+        lock.unlock()
+    }
 }
 
 /// Lifecycle states for a streaming transcription session.
-enum StreamingState {
+enum StreamingState: Sendable, Equatable {
     case idle
     case connecting
     case streaming
@@ -253,7 +260,7 @@ enum StreamingState {
     case cancelled
 }
 
-protocol StreamingTranscriptionServicing: AnyObject {
+protocol StreamingTranscriptionServicing: AnyObject, Sendable {
     @MainActor
     var isActive: Bool { get }
 
@@ -269,512 +276,327 @@ protocol StreamingTranscriptionServicing: AnyObject {
     func cancel()
 }
 
-/// Manages a streaming transcription lifecycle: buffers audio chunks, sends them to the provider, and collects the final text.
+/// Optional capability used by the concrete realtime service. Keeping it
+/// separate preserves compatibility with lightweight test doubles.
 @MainActor
-class StreamingTranscriptionService: StreamingTranscriptionServicing {
-    typealias ProviderFactory = (any TranscriptionModel, ModelContext, FluidAudioTranscriptionService?) -> any StreamingTranscriptionProvider
+protocol StreamingPerformanceTracing: AnyObject, Sendable {
+    func setPerformanceTrace(_ trace: RealtimePerformanceTrace?)
+}
 
-    private let logger = Logger(subsystem: AppIdentity.loggerSubsystem, category: "StreamingTranscriptionService")
-    private var provider: StreamingTranscriptionProvider?
-    private var sendTask: Task<Void, Never>?
-    private var sendLoopFinishedStream: AsyncStream<Void>?
-    private var sendLoopFinishedContinuation: AsyncStream<Void>.Continuation?
-    private var eventConsumerTask: Task<Void, Never>?
-    private let chunkSource: AudioChunkSource
-    private var state: StreamingState = .idle
-    private var committedSegments: [String] = []
-    private let modelContext: ModelContext
+/// Binds the hardware producer's per-recording continuity token to the
+/// streaming facade. The service will not accept a successful final result
+/// until hardware capture has sealed and late upstream/downstream drops have
+/// both been rechecked.
+@MainActor
+protocol StreamingAudioContinuityBinding: AnyObject, Sendable {
+    func bindAudioContinuity(_ continuity: RecordingAudioContinuity?)
+}
+
+/// Starts provider finalization from a generic executor. Once this method has
+/// returned, progress no longer depends on MainActor availability.
+protocol StreamingImmediateFinalizing: AnyObject, Sendable {
+    nonisolated func requestFinalizationTask() -> Task<String, Error>
+}
+
+/// Constructs the provider snapshot synchronously on MainActor, then submits
+/// connection work to core before `prepare()` returns its audio callback.
+@MainActor
+protocol StreamingImmediateStarting: AnyObject, Sendable {
+    func requestStartTask(
+        model: any TranscriptionModel,
+        context: TranscriptionRequestContext
+    ) -> Task<Void, Error>
+}
+
+/// MainActor-facing compatibility facade. Provider I/O, queue draining, event
+/// aggregation, and finalization are all owned by `StreamingTranscriptionCore`.
+@MainActor
+final class StreamingTranscriptionService:
+    StreamingTranscriptionServicing,
+    StreamingPerformanceTracing,
+    StreamingAudioContinuityBinding,
+    StreamingImmediateStarting,
+    StreamingImmediateFinalizing
+{
+    typealias ProviderFactory = @Sendable (
+        any TranscriptionModel,
+        [String],
+        FluidAudioTranscriptionService?
+    ) throws -> any StreamingTranscriptionProvider
+
+    private struct ProviderStartInput: @unchecked Sendable {
+        let model: any TranscriptionModel
+        let fluidAudioService: FluidAudioTranscriptionService?
+        let language: String
+        let trace: RealtimePerformanceTrace?
+        let usesVocabulary: Bool
+    }
+
+    private let modelContainer: StreamingVocabularyContainerReference
+    private let vocabularySnapshotStore: StreamingVocabularySnapshotStore
     private let fluidAudioService: FluidAudioTranscriptionService?
     private let providerFactory: ProviderFactory
-    private let drainTimeoutNanoseconds: UInt64
-    private let finalCommitTimeoutNanoseconds: UInt64
-    private let disconnectTimeoutNanoseconds: UInt64
-    private var onPartialTranscript: (@MainActor (String) -> Void)?
-    private let metrics = StreamingMetrics()
-    private var stopStartedAt: Date?
-    private var firstPartialLogged = false
-    private var firstCommitLogged = false
-    private let failureState = StreamingFailureState()
-    private let realtimeActivity = RealtimeTranscriptionActivity()
-    private let partialEventCoalescer = StreamingPartialEventCoalescer()
+    private let audioQueue: StreamingAudioQueue
+    private let telemetry: StreamingTelemetry
+    private let core: StreamingTranscriptionCore
+    private let audioContinuityBinding = RecordingAudioContinuityBinding()
+    private var performanceTrace: RealtimePerformanceTrace?
+    private var connectionTask: Task<Void, Error>?
 
     init(
-        modelContext: ModelContext,
+        modelContainer: ModelContainer,
         fluidAudioService: FluidAudioTranscriptionService? = nil,
-        onPartialTranscript: (@MainActor (String) -> Void)? = nil,
+        onPartialTranscript: (@MainActor @Sendable (String) -> Void)? = nil,
+        onTranscriptSnapshot: (@MainActor @Sendable (StreamingTranscriptSnapshot) -> Void)? = nil,
         providerFactory: ProviderFactory? = nil,
+        vocabularySnapshotStore: StreamingVocabularySnapshotStore = .shared,
         maxBufferedChunks: Int = 600,
+        maximumQueueAge: TimeInterval = RealtimePerformanceBudget.maximumStreamingQueueAge,
+        partialPublicationInterval: TimeInterval = 0.040,
         drainTimeoutNanoseconds: UInt64 = 3_000_000_000,
         finalCommitTimeoutNanoseconds: UInt64 = 10_000_000_000,
         disconnectTimeoutNanoseconds: UInt64 = 2_000_000_000
     ) {
-        self.modelContext = modelContext
+        let audioQueue = StreamingAudioQueue(capacity: maxBufferedChunks)
+        let telemetry = StreamingTelemetry(maximumPermittedQueueAge: maximumQueueAge)
+        let coalescer = StreamingPartialEventCoalescer(interval: partialPublicationInterval)
+
+        self.modelContainer = StreamingVocabularyContainerReference(modelContainer)
+        self.vocabularySnapshotStore = vocabularySnapshotStore
         self.fluidAudioService = fluidAudioService
-        self.providerFactory = providerFactory ?? Self.defaultProviderFactory
-        self.chunkSource = AudioChunkSource(maxBufferedChunks: maxBufferedChunks)
-        self.drainTimeoutNanoseconds = drainTimeoutNanoseconds
-        self.finalCommitTimeoutNanoseconds = finalCommitTimeoutNanoseconds
-        self.disconnectTimeoutNanoseconds = disconnectTimeoutNanoseconds
-        self.onPartialTranscript = onPartialTranscript
+        if let providerFactory {
+            self.providerFactory = providerFactory
+        } else {
+            self.providerFactory = { model, vocabulary, fluidAudioService in
+                try Self.defaultProviderFactory(
+                    model: model,
+                    customVocabulary: vocabulary,
+                    fluidAudioService: fluidAudioService
+                )
+            }
+        }
+        self.audioQueue = audioQueue
+        self.telemetry = telemetry
+        self.core = StreamingTranscriptionCore(
+            audioQueue: audioQueue,
+            telemetry: telemetry,
+            partialCoalescer: coalescer,
+            drainTimeoutNanoseconds: drainTimeoutNanoseconds,
+            finalCommitTimeoutNanoseconds: finalCommitTimeoutNanoseconds,
+            disconnectTimeoutNanoseconds: disconnectTimeoutNanoseconds,
+            onPartialTranscript: onPartialTranscript,
+            onTranscriptSnapshot: onTranscriptSnapshot
+        )
     }
 
     deinit {
-        onPartialTranscript = nil
-        sendTask?.cancel()
-        sendLoopFinishedContinuation?.finish()
-        eventConsumerTask?.cancel()
-        partialEventCoalescer.cancel()
-        chunkSource.finish()
-        commitSignal?.finish()
-        realtimeActivity.end()
-    }
-
-    /// Signal used to notify `waitForFinalCommit` when a new committed segment arrives.
-    private var commitSignal: AsyncStream<Void>.Continuation?
-
-    /// Whether the streaming connection is fully established and actively sending.
-    var isActive: Bool { state == .streaming || state == .committing }
-
-    /// Start a streaming transcription session for the given model.
-    func startStreaming(model: any TranscriptionModel, context: TranscriptionRequestContext) async throws {
-        guard state != .cancelled else {
-            throw CancellationError()
-        }
-
-        let start = Date()
-        realtimeActivity.begin(reason: "Realtime transcription")
-        state = .connecting
-        committedSegments = []
-        failureState.reset()
-        partialEventCoalescer.cancel()
-        firstPartialLogged = false
-        firstCommitLogged = false
-
-        let provider = providerFactory(model, modelContext, fluidAudioService)
-        self.provider = provider
-
-        let selectedLanguage = context.language ?? "auto"
-        logger.notice("Streaming start requested model=\(model.displayName, privacy: .public) language=\(selectedLanguage, privacy: .public)")
-
-        do {
-            try await provider.connect(model: model, language: selectedLanguage)
-        } catch {
-            state = .failed
-            await provider.disconnect()
-            self.provider = nil
-            realtimeActivity.end()
-            throw error
-        }
-
-        // If cancel() was called while we were awaiting the connection, tear down immediately.
-        if state == .cancelled {
-            await provider.disconnect()
-            self.provider = nil
-            realtimeActivity.end()
-            throw CancellationError()
-        }
-
-        state = .streaming
-        startSendLoop()
-        startEventConsumer()
-
-        logger.notice("Streaming connected model=\(model.displayName, privacy: .public) elapsed=\(Date().timeIntervalSince(start), format: .fixed(precision: 3), privacy: .public)s")
-    }
-
-    /// Buffers an audio chunk for sending. Safe to call from the audio callback thread.
-    nonisolated func sendAudioChunk(_ data: Data) {
-        metrics.recordReceived(data.count)
-        switch chunkSource.send(data) {
-        case .enqueued:
-            break
-        case .enqueuedDroppingOldest(let droppedByteCount):
-            metrics.recordDropped(droppedByteCount)
-        case .terminated:
-            metrics.recordDropped(data.count)
+        connectionTask?.cancel()
+        audioQueue.cancel()
+        let core = core
+        Task.detached(priority: .utility) {
+            await core.cancel()
         }
     }
 
-    /// Stops streaming, commits remaining audio, and returns the final transcribed text.
-    func stopAndGetFinalText() async throws -> String {
-        if let failure = failureState.current() {
-            state = .failed
-            await cleanupStreaming()
-            throw failure
-        }
-
-        guard let provider = provider, state == .streaming else {
-            throw StreamingTranscriptionError.notConnected
-        }
-
-        state = .committing
-        stopStartedAt = Date()
-        let beforeDrain = metrics.snapshot()
-        logger.notice("Streaming stop requested receivedChunks=\(beforeDrain.receivedChunks, privacy: .public) sentChunks=\(beforeDrain.sentChunks, privacy: .public) droppedChunks=\(beforeDrain.droppedChunks, privacy: .public) receivedBytes=\(beforeDrain.receivedBytes, privacy: .public) sentBytes=\(beforeDrain.sentBytes, privacy: .public) droppedBytes=\(beforeDrain.droppedBytes, privacy: .public)")
-
-        // Finish the chunk source so the send loop drains remaining chunks and exits naturally.
-        do {
-            try await drainRemainingChunks()
-            if let failure = failureState.current() {
-                throw failure
-            }
-            try throwIfAudioDropped()
-        } catch {
-            state = .failed
-            await cleanupStreaming()
-            throw error
-        }
-
-        // Set up the commit signal BEFORE sending commit to avoid a race with the response.
-        let (signalStream, signalContinuation) = AsyncStream.makeStream(of: Void.self)
-        self.commitSignal = signalContinuation
-
-        // Send commit to finalize any remaining audio
-        do {
-            try await provider.commit()
-        } catch {
-            commitSignal?.finish()
-            commitSignal = nil
-            logger.error("Failed to send commit: \(error, privacy: .public)")
-            state = .failed
-            await cleanupStreaming()
-            throw error
-        }
-
-        // Wait for the server to acknowledge our commit (or timeout)
-        let finalText: String
-        do {
-            finalText = try await waitForFinalCommit(signalStream: signalStream)
-            if let failure = failureState.current() {
-                throw failure
-            }
-        } catch {
-            state = .failed
-            await cleanupStreaming()
-            throw error
-        }
-        if let stopStartedAt {
-            logger.notice("Streaming stop completed elapsed=\(Date().timeIntervalSince(stopStartedAt), format: .fixed(precision: 3), privacy: .public)s finalChars=\(finalText.count, privacy: .public)")
-        }
-
-        state = .done
-        await cleanupStreaming()
-
-        return finalText
+    var isActive: Bool {
+        let state = metricsSnapshot.state
+        return state == .streaming || state == .committing
     }
 
-    /// Cancels the streaming session without waiting for results.
-    func cancel() {
-        state = .cancelled
-        onPartialTranscript = nil
-        partialEventCoalescer.cancel()
-        eventConsumerTask?.cancel()
-        eventConsumerTask = nil
-        sendTask?.cancel()
-        sendTask = nil
-        sendLoopFinishedContinuation?.finish()
-        sendLoopFinishedContinuation = nil
-        sendLoopFinishedStream = nil
-        chunkSource.finish()
-
-        // Clean up commit signal if waiting
-        commitSignal?.finish()
-        commitSignal = nil
-
-        let providerToDisconnect = provider
-        provider = nil
-        realtimeActivity.end()
-
-        Task {
-            await providerToDisconnect?.disconnect()
-        }
-
-        committedSegments = []
-        logger.notice("Streaming cancelled")
+    nonisolated var metricsSnapshot: StreamingMetricsSnapshot {
+        telemetry.snapshot(queue: audioQueue.snapshot())
     }
 
-    // MARK: - Private
+    func setPerformanceTrace(_ trace: RealtimePerformanceTrace?) {
+        performanceTrace = trace
+        let core = core
+        Task.detached(priority: .userInitiated) {
+            await core.updatePerformanceTrace(trace)
+        }
+    }
 
-    private static func defaultProviderFactory(
+    func bindAudioContinuity(_ continuity: RecordingAudioContinuity?) {
+        audioContinuityBinding.bind(continuity)
+    }
+
+    func startStreaming(
         model: any TranscriptionModel,
-        modelContext: ModelContext,
+        context: TranscriptionRequestContext
+    ) async throws {
+        try await requestStartTask(model: model, context: context).value
+    }
+
+    func requestStartTask(
+        model: any TranscriptionModel,
+        context: TranscriptionRequestContext
+    ) -> Task<Void, Error> {
+        if let connectionTask { return connectionTask }
+
+        let core = core
+        let providerFactory = providerFactory
+        let vocabularySnapshotStore = vocabularySnapshotStore
+        let modelContainer = modelContainer
+        let input = ProviderStartInput(
+            model: model,
+            fluidAudioService: fluidAudioService,
+            language: context.language ?? "auto",
+            trace: performanceTrace,
+            usesVocabulary: CloudProviderRegistry.usesStreamingVocabulary(for: model.provider)
+        )
+
+        // Task submission is the synchronous hot-path operation. Vocabulary
+        // loading and provider construction begin only inside this detached
+        // preconnect task, so neither SwiftData nor provider setup can delay
+        // recorder/audio startup.
+        let task = Task.detached(priority: .userInitiated) {
+            let vocabulary: [String]
+            if input.usesVocabulary {
+                vocabulary = await vocabularySnapshotStore
+                    .snapshot(for: modelContainer)
+                    .terms
+            } else {
+                vocabulary = []
+            }
+            let provider = try providerFactory(
+                input.model,
+                vocabulary,
+                input.fluidAudioService
+            )
+            try await core.start(
+                provider: provider,
+                model: input.model,
+                language: input.language,
+                performanceTrace: input.trace
+            )
+        }
+        connectionTask = task
+        return task
+    }
+
+    nonisolated func sendAudioChunk(_ data: Data) {
+        let now = ProcessInfo.processInfo.systemUptime
+        switch audioQueue.enqueue(data, now: now) {
+        case .enqueued(let depth, let oldestAge):
+            let exceededBudget = telemetry.recordEnqueue(
+                byteCount: data.count,
+                depth: depth,
+                oldestAge: oldestAge
+            )
+            if exceededBudget {
+                audioQueue.cancel()
+            }
+        case .enqueuedDroppingOldest(
+            let droppedBytes,
+            let droppedAge,
+            let depth,
+            let oldestAge
+        ):
+            telemetry.recordEnqueue(
+                byteCount: data.count,
+                depth: depth,
+                oldestAge: oldestAge
+            )
+            telemetry.recordDropped(byteCount: droppedBytes, age: droppedAge)
+            audioQueue.cancel()
+        case .terminated:
+            telemetry.recordEnqueue(byteCount: data.count, depth: 0, oldestAge: 0)
+            telemetry.recordDropped(byteCount: data.count, age: 0)
+        }
+    }
+
+    func stopAndGetFinalText() async throws -> String {
+        try await Self.finalTextAfterContinuityValidation(
+            core: core,
+            audioQueue: audioQueue,
+            telemetry: telemetry,
+            continuity: audioContinuityBinding.snapshot()
+        )
+    }
+
+    nonisolated func requestFinalizationTask() -> Task<String, Error> {
+        let core = core
+        let audioQueue = audioQueue
+        let telemetry = telemetry
+        let continuity = audioContinuityBinding.snapshot()
+        return Task.detached(priority: .userInitiated) {
+            try await Self.finalTextAfterContinuityValidation(
+                core: core,
+                audioQueue: audioQueue,
+                telemetry: telemetry,
+                continuity: continuity
+            )
+        }
+    }
+
+    func cancel() {
+        // Close ingress synchronously so the realtime callback cannot add work
+        // while actor teardown waits to run.
+        audioQueue.cancel()
+        telemetry.setState(.cancelled)
+        connectionTask?.cancel()
+        let core = core
+        Task.detached(priority: .userInitiated) {
+            await core.cancel()
+        }
+    }
+
+    private nonisolated static func finalTextAfterContinuityValidation(
+        core: StreamingTranscriptionCore,
+        audioQueue: StreamingAudioQueue,
+        telemetry: StreamingTelemetry,
+        continuity: RecordingAudioContinuity?
+    ) async throws -> String {
+        let text = try await core.stopAndGetFinalText()
+
+        // Provider finalization intentionally overlaps AudioOutputUnitStop. A
+        // fast final acknowledgement must still wait for the hardware seal so
+        // a pipe overflow or a tail chunk rejected after requestCommit cannot
+        // race a successful return.
+        if let continuity {
+            await continuity.waitUntilCaptureSealed()
+        }
+
+        let hardware = continuity?.snapshot()
+        let transport = telemetry.snapshot(queue: audioQueue.snapshot())
+        let droppedChunks = (hardware?.streamingDroppedChunks ?? 0) + transport.droppedChunks
+        let droppedBytes = (hardware?.streamingDroppedBytes ?? 0) + transport.droppedBytes
+        guard droppedChunks == 0, droppedBytes == 0 else {
+            throw StreamingTranscriptionError.audioDropped(
+                chunks: droppedChunks,
+                bytes: droppedBytes
+            )
+        }
+        return text
+    }
+
+    private nonisolated static func defaultProviderFactory(
+        model: any TranscriptionModel,
+        customVocabulary: [String],
         fluidAudioService: FluidAudioTranscriptionService?
-    ) -> any StreamingTranscriptionProvider {
+    ) throws -> any StreamingTranscriptionProvider {
         if model.provider == .fluidAudio {
             if FluidAudioModelManager.isNemotronModel(named: model.name) {
                 return FluidAudioNemotronStreamingProvider()
             }
-
             if FluidAudioModelManager.isParakeetUnifiedModel(named: model.name) {
                 return FluidAudioUnifiedStreamingProvider()
             }
-
             guard let fluidAudioService else {
-                fatalError("FluidAudioTranscriptionService required for FluidAudio streaming. Ensure it is passed to StreamingTranscriptionService.")
+                throw StreamingTranscriptionError.connectionFailed(
+                    "FluidAudioTranscriptionService is unavailable"
+                )
             }
             return FluidAudioStreamingProvider(fluidAudioService: fluidAudioService)
         }
+
         guard let cloudProvider = CloudProviderRegistry.provider(for: model.provider),
-              let streamingProvider = cloudProvider.makeStreamingProvider(modelContext: modelContext) else {
-            fatalError("Unsupported streaming provider: \(model.provider). Check shouldUseRealtimeTranscription() before calling startStreaming().")
+              let provider = cloudProvider.makeStreamingProvider(
+                customVocabulary: customVocabulary
+              ) else {
+            throw StreamingTranscriptionError.connectionFailed(
+                "Unsupported streaming provider: \(model.provider)"
+            )
         }
-        return streamingProvider
-    }
-
-    /// Consumes audio chunks from the AsyncStream and sends them to the provider.
-    private func startSendLoop() {
-        let source = chunkSource
-        let provider = provider
-        let metrics = metrics
-        let failureState = failureState
-        let logger = logger
-        let (finishedStream, finishedContinuation) = AsyncStream.makeStream(of: Void.self)
-        sendLoopFinishedStream = finishedStream
-        sendLoopFinishedContinuation = finishedContinuation
-
-        sendTask = Task.detached(priority: .userInitiated) { [source, finishedContinuation, logger] in
-            defer {
-                finishedContinuation.yield()
-                finishedContinuation.finish()
-            }
-            for await chunk in source.stream {
-                do {
-                    try await provider?.sendAudioChunk(chunk)
-                    metrics.recordSent(chunk.count)
-                } catch {
-                    let desc = error.localizedDescription
-                    if failureState.record(error) {
-                        logger.error("Streaming send failed, closing audio source: \(desc, privacy: .public)")
-                    }
-                    source.finish()
-                    break
-                }
-            }
-        }
-    }
-
-    /// Finishes the chunk source and waits for the send loop to process all remaining buffered chunks.
-    private func drainRemainingChunks() async throws {
-        let start = Date()
-        chunkSource.finish()
-        guard let sendTask else { return }
-        guard let finishedStream = sendLoopFinishedStream else {
-            sendTask.cancel()
-            self.sendTask = nil
-            throw StreamingTranscriptionError.timeout
-        }
-
-        let timeoutNanoseconds = drainTimeoutNanoseconds
-        let drained = await withTaskGroup(of: Bool.self) { group in
-            group.addTask {
-                for await _ in finishedStream {
-                    return true
-                }
-                return false
-            }
-
-            group.addTask {
-                try? await Task.sleep(nanoseconds: timeoutNanoseconds)
-                return false
-            }
-
-            let result = await group.next() ?? false
-            group.cancelAll()
-            return result
-        }
-
-        if !drained {
-            sendTask.cancel()
-            self.sendTask = nil
-            logger.error("Timed out while draining streaming audio chunks")
-            throw StreamingTranscriptionError.timeout
-        }
-
-        self.sendTask = nil
-        sendLoopFinishedContinuation = nil
-        sendLoopFinishedStream = nil
-        if let failure = failureState.current() {
-            throw failure
-        }
-        let snapshot = metrics.snapshot()
-        logger.notice("Streaming drain finished elapsed=\(Date().timeIntervalSince(start), format: .fixed(precision: 3), privacy: .public)s receivedChunks=\(snapshot.receivedChunks, privacy: .public) sentChunks=\(snapshot.sentChunks, privacy: .public) droppedChunks=\(snapshot.droppedChunks, privacy: .public) receivedBytes=\(snapshot.receivedBytes, privacy: .public) sentBytes=\(snapshot.sentBytes, privacy: .public) droppedBytes=\(snapshot.droppedBytes, privacy: .public)")
-    }
-
-    private func throwIfAudioDropped() throws {
-        let snapshot = metrics.snapshot()
-        guard snapshot.droppedChunks > 0 else { return }
-        logger.error("Streaming audio dropped chunks=\(snapshot.droppedChunks, privacy: .public) bytes=\(snapshot.droppedBytes, privacy: .public); falling back to batch transcription")
-        throw StreamingTranscriptionError.audioDropped(
-            chunks: snapshot.droppedChunks,
-            bytes: snapshot.droppedBytes
-        )
-    }
-
-    /// Consumes transcription events throughout the session, accumulating committed segments.
-    private func startEventConsumer() {
-        guard let provider = provider else { return }
-        let events = provider.transcriptionEvents
-        let source = chunkSource
-        let failureState = failureState
-        let partialEventCoalescer = partialEventCoalescer
-
-        eventConsumerTask = Task.detached(priority: .userInitiated) { [weak self, source, failureState] in
-            for await event in events {
-                guard let self = self else { break }
-                switch event {
-                case .committed(let text):
-                    let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-                    partialEventCoalescer.cancel()
-                    await MainActor.run {
-                        if !self.firstCommitLogged {
-                            self.firstCommitLogged = true
-                            let elapsed = self.stopStartedAt.map { Date().timeIntervalSince($0) } ?? 0
-                            self.logger.notice("Streaming first committed event chars=\(trimmed.count, privacy: .public) stopElapsed=\(elapsed, format: .fixed(precision: 3), privacy: .public)s")
-                        }
-                        if !trimmed.isEmpty {
-                            self.committedSegments.append(trimmed)
-                        }
-                        // Refresh the live preview so it keeps showing the full running transcript
-                        // after a commit (instead of resetting to empty until the next partial).
-                        if self.state == .streaming {
-                            self.onPartialTranscript?(self.committedSegments.joined(separator: " "))
-                        }
-                        if self.state == .committing {
-                            self.commitSignal?.yield()
-                        }
-                    }
-                case .partial(let text):
-                    partialEventCoalescer.submit(text) { [weak self] text in
-                        self?.handlePartialEvent(text)
-                    }
-                case .sessionStarted:
-                    break
-                case .error(let error):
-                    failureState.record(error)
-                    source.finish()
-                    await MainActor.run {
-                        if self.state == .streaming || self.state == .committing {
-                            self.state = .failed
-                        }
-                        if self.commitSignal != nil {
-                            self.commitSignal?.yield()
-                        }
-                        self.commitSignal?.finish()
-                        self.logger.error("Streaming event error: \(error, privacy: .public)")
-                    }
-                }
-            }  
-        }
-    }
-
-    private func handlePartialEvent(_ text: String) {
-        if !firstPartialLogged {
-            firstPartialLogged = true
-            logger.notice("Streaming first partial event chars=\(text.count, privacy: .public)")
-        }
-        if state == .streaming {
-            let prefix = committedSegments.joined(separator: " ")
-            let display: String
-            if prefix.isEmpty {
-                display = text
-            } else if text.hasPrefix(prefix) || text.hasPrefix(prefix + " ") {
-                // Provider already sends cumulative partials (e.g. FluidAudio fullText).
-                display = text
-            } else {
-                display = prefix + " " + text
-            }
-            onPartialTranscript?(display)
-        }
-    }
-
-    /// Waits for the server to acknowledge our explicit commit, with a 10-second timeout.
-    private func waitForFinalCommit(signalStream: AsyncStream<Void>) async throws -> String {
-        // Race: wait for commit acknowledgment vs timeout
-        let timeoutNanoseconds = finalCommitTimeoutNanoseconds
-        let receivedInTime = await withTaskGroup(of: Bool.self) { group in
-            group.addTask { @MainActor in
-                for await _ in signalStream {
-                    return true
-                }
-                return false
-            }
-
-            group.addTask {
-                try? await Task.sleep(nanoseconds: timeoutNanoseconds)
-                return false
-            }
-
-            let result = await group.next() ?? false
-            group.cancelAll()
-            return result
-        }
-        logger.notice("Streaming final wait finished received=\(receivedInTime, privacy: .public) segments=\(self.committedSegments.count, privacy: .public)")
-
-        // Clean up the signal
-        commitSignal?.finish()
-        commitSignal = nil
-
-        if !receivedInTime {
-            logger.warning("No final commit acknowledgement received from streaming provider")
-            throw StreamingTranscriptionError.timeout
-        }
-
-        return committedSegments.isEmpty ? "" : committedSegments.joined(separator: " ")
-    }
-
-    private func cleanupStreaming() async {
-        onPartialTranscript = nil
-        partialEventCoalescer.cancel()
-        eventConsumerTask?.cancel()
-        eventConsumerTask = nil
-        sendTask?.cancel()
-        sendTask = nil
-        sendLoopFinishedContinuation?.finish()
-        sendLoopFinishedContinuation = nil
-        sendLoopFinishedStream = nil
-        chunkSource.finish()
-        commitSignal?.finish()
-        commitSignal = nil
-        if let provider {
-            await disconnectProvider(provider)
-        }
-        provider = nil
-        realtimeActivity.end()
-        state = .idle
-        committedSegments = []
-    }
-
-    private func disconnectProvider(_ provider: StreamingTranscriptionProvider) async {
-        let timeoutNanoseconds = disconnectTimeoutNanoseconds
-        let (finishedStream, finishedContinuation) = AsyncStream.makeStream(of: Void.self)
-        let disconnectTask = Task {
-            await provider.disconnect()
-            finishedContinuation.yield()
-            finishedContinuation.finish()
-        }
-
-        let completed = await withTaskGroup(of: Bool.self) { group in
-            group.addTask {
-                for await _ in finishedStream {
-                    return true
-                }
-                return false
-            }
-
-            group.addTask {
-                try? await Task.sleep(nanoseconds: timeoutNanoseconds)
-                finishedContinuation.finish()
-                return false
-            }
-
-            let result = await group.next() ?? false
-            group.cancelAll()
-            return result
-        }
-
-        if !completed {
-            disconnectTask.cancel()
-            finishedContinuation.finish()
-            logger.warning("Timed out while disconnecting streaming provider")
-        }
+        return provider
     }
 }

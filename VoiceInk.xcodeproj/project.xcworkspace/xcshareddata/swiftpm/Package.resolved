@@ -40,10 +40,10 @@
     {
       "identity" : "llmkit",
       "kind" : "remoteSourceControl",
-      "location" : "https://github.com/Beingpax/LLMkit.git",
+      "location" : "https://github.com/metrovoc/LLMkit.git",
       "state" : {
-        "branch" : "main",
-        "revision" : "adc2239e2a3c586fd442a8ec1d96dec8e9ae8917"
+        "revision" : "267af03b4390f13179cd6e340a554cccf57b6403",
+        "version" : "1.80.1"
       }
     },
     {

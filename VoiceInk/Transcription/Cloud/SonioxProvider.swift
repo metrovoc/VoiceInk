@@ -5,6 +5,7 @@ import LLMkit
 struct SonioxProvider: CloudProvider {
     let modelProvider: ModelProvider = .soniox
     let providerKey: String = "Soniox"
+    let usesStreamingVocabulary = true
     let languageCodes: [String]? = [
         "af", "sq", "ar", "az", "eu", "be", "bn", "bs", "bg", "ca",
         "zh", "hr", "cs", "da", "nl", "en", "et", "fi", "fr", "gl",
@@ -40,8 +41,8 @@ struct SonioxProvider: CloudProvider {
         )
     }
 
-    func makeStreamingProvider(modelContext: ModelContext) -> (any StreamingTranscriptionProvider)? {
-        SonioxStreamingProvider(modelContext: modelContext)
+    func makeStreamingProvider(customVocabulary: [String]) -> (any StreamingTranscriptionProvider)? {
+        SonioxStreamingProvider(customVocabulary: customVocabulary)
     }
 
     func verifyAPIKey(_ key: String) async -> (isValid: Bool, errorMessage: String?) {

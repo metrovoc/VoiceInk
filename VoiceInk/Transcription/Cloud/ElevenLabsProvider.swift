@@ -52,7 +52,7 @@ struct ElevenLabsProvider: CloudProvider {
         )
     }
 
-    func makeStreamingProvider(modelContext: ModelContext) -> (any StreamingTranscriptionProvider)? {
+    func makeStreamingProvider(customVocabulary _: [String]) -> (any StreamingTranscriptionProvider)? {
         ElevenLabsStreamingProvider()
     }
 

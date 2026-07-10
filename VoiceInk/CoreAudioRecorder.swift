@@ -5,6 +5,119 @@ import AVFoundation
 import Atomics
 import os
 
+/// Realtime-safe streaming sample-rate converter. The resampling clock and the
+/// sample immediately before the current callback are retained so arbitrary
+/// AUHAL buffer boundaries behave exactly like one continuous input buffer.
+/// All storage is owned by the caller; `process` performs no allocation,
+/// locking, or executor hop.
+struct StatefulLinearPCMResampler {
+    private var inputSampleRate: Double = 0
+    private var outputSampleRate: Double = 0
+    private var sourceFramesPerOutputFrame: Double = 1
+    private var nextOutputSourcePosition: Double = 0
+    private var processedInputFrameCount: UInt64 = 0
+    private var previousMonoSample: Float32 = 0
+    private var hasPreviousMonoSample = false
+
+    mutating func reset(inputSampleRate: Double, outputSampleRate: Double) {
+        self.inputSampleRate = inputSampleRate
+        self.outputSampleRate = outputSampleRate
+        sourceFramesPerOutputFrame = inputSampleRate > 0 && outputSampleRate > 0
+            ? inputSampleRate / outputSampleRate
+            : 1
+        nextOutputSourcePosition = 0
+        processedInputFrameCount = 0
+        previousMonoSample = 0
+        hasPreviousMonoSample = false
+    }
+
+    /// Returns the number of output frames, or `-1` when the supplied format or
+    /// capacity is invalid. Capacity is checked before state is advanced, so a
+    /// rejected callback cannot partially mutate the resampling clock.
+    mutating func process(
+        inputSamples: UnsafePointer<Float32>,
+        frameCount: Int,
+        channelCount: Int,
+        outputBuffer: UnsafeMutablePointer<Int16>,
+        outputCapacity: Int
+    ) -> Int {
+        guard inputSampleRate > 0,
+              outputSampleRate > 0,
+              sourceFramesPerOutputFrame > 0,
+              sourceFramesPerOutputFrame.isFinite,
+              frameCount >= 0,
+              channelCount > 0,
+              outputCapacity >= 0 else {
+            return -1
+        }
+        guard frameCount > 0 else { return 0 }
+
+        let lastInputPosition = Double(processedInputFrameCount) + Double(frameCount - 1)
+        let requiredOutputFrames: Int
+        if nextOutputSourcePosition <= lastInputPosition {
+            requiredOutputFrames = Int(
+                floor(
+                    (lastInputPosition - nextOutputSourcePosition)
+                        / sourceFramesPerOutputFrame
+                )
+            ) + 1
+        } else {
+            requiredOutputFrames = 0
+        }
+        guard requiredOutputFrames <= outputCapacity else { return -1 }
+
+        var outputIndex = 0
+        var currentInputPosition = Double(processedInputFrameCount)
+
+        for frameIndex in 0..<frameCount {
+            let sampleOffset = frameIndex * channelCount
+            var currentMonoSample: Float32 = 0
+            for channelIndex in 0..<channelCount {
+                currentMonoSample += inputSamples[sampleOffset + channelIndex]
+            }
+            currentMonoSample /= Float32(channelCount)
+
+            let canInterpolateFromPrevious = hasPreviousMonoSample
+            while nextOutputSourcePosition <= currentInputPosition {
+                let sample: Float32
+                if canInterpolateFromPrevious {
+                    let previousInputPosition = currentInputPosition - 1
+                    let fraction = Float32(
+                        max(
+                            0,
+                            min(1, nextOutputSourcePosition - previousInputPosition)
+                        )
+                    )
+                    sample = previousMonoSample
+                        + fraction * (currentMonoSample - previousMonoSample)
+                } else {
+                    // The first input frame has no predecessor. Its exact value
+                    // defines output time zero; subsequent calls interpolate
+                    // across the retained callback boundary sample.
+                    sample = currentMonoSample
+                }
+
+                outputBuffer[outputIndex] = Self.int16Sample(from: sample)
+                outputIndex += 1
+                nextOutputSourcePosition += sourceFramesPerOutputFrame
+            }
+
+            previousMonoSample = currentMonoSample
+            hasPreviousMonoSample = true
+            currentInputPosition += 1
+        }
+
+        processedInputFrameCount &+= UInt64(frameCount)
+        return outputIndex
+    }
+
+    private static func int16Sample(from sample: Float32) -> Int16 {
+        guard sample.isFinite else { return 0 }
+        let scaled = sample * 32767
+        return Int16(max(-32768, min(32767, scaled)))
+    }
+}
+
 // MARK: - Core Audio Recorder (AUHAL-based, does not change system default device)
 final class CoreAudioRecorder: @unchecked Sendable {
 
@@ -32,6 +145,7 @@ final class CoreAudioRecorder: @unchecked Sendable {
     // Conversion buffer
     private var conversionBuffer: UnsafeMutablePointer<Int16>?
     private var conversionBufferSize: UInt32 = 0
+    private var pcmResampler = StatefulLinearPCMResampler()
 
     private let averagePowerBits = ManagedAtomic<UInt32>(Float32(-160.0).bitPattern)
     private let peakPowerBits = ManagedAtomic<UInt32>(Float32(-160.0).bitPattern)
@@ -51,7 +165,11 @@ final class CoreAudioRecorder: @unchecked Sendable {
     /// Called off the audio thread with raw PCM data (16-bit, 16kHz, mono) for streaming.
     private let audioChunkPipe = RealtimeAudioChunkPipe()
     private let audioFileWriter = RealtimeAudioFileWriter()
-    var onAudioChunk: ((_ data: Data) -> Void)? {
+    /// Assigned before AUHAL starts and cleared only after it has stopped. The
+    /// realtime callback may therefore update its atomic counters without
+    /// synchronizing access to this reference.
+    private var audioContinuity: RecordingAudioContinuity?
+    var onAudioChunk: RecordingAudioChunkHandler? {
         get { audioChunkPipe.callback }
         set { audioChunkPipe.callback = newValue }
     }
@@ -121,6 +239,7 @@ final class CoreAudioRecorder: @unchecked Sendable {
     func startRecording(
         toOutputFile url: URL,
         deviceID: AudioDeviceID,
+        continuity: RecordingAudioContinuity,
         shouldCancel: (() -> Bool)? = nil
     ) throws {
         func checkCancellation() throws {
@@ -142,6 +261,16 @@ final class CoreAudioRecorder: @unchecked Sendable {
 
         // Stop any existing recording
         stopRecording()
+        audioContinuity = continuity
+        audioFileWriter.setContinuity(continuity)
+        audioChunkPipe.setContinuity(continuity)
+        defer {
+            // Preparation can fail before the output-file `do/catch` below.
+            // Never leave a bound token unsealed when capture did not start.
+            if !isRecording, audioFile == nil, audioContinuity === continuity {
+                sealAndReleaseAudioContinuity()
+            }
+        }
         try checkCancellation()
         #if DEBUG
         mark("stopRecording")
@@ -149,6 +278,10 @@ final class CoreAudioRecorder: @unchecked Sendable {
 
         try prepare(deviceID: deviceID, shouldCancel: shouldCancel)
         try checkCancellation()
+        pcmResampler.reset(
+            inputSampleRate: deviceFormat.mSampleRate,
+            outputSampleRate: outputFormat.mSampleRate
+        )
         #if DEBUG
         mark("prepare")
         #endif
@@ -180,13 +313,16 @@ final class CoreAudioRecorder: @unchecked Sendable {
             closeOutputFile()
             recordingURL = nil
             teardownPreparedAudioUnit()
+            sealAndReleaseAudioContinuity()
             throw error
         }
     }
 
     /// Stops the current recording
-    func stopRecording() {
+    func stopRecording(onStreamingDrained: (@Sendable () -> Void)? = nil) {
         guard isRecording || audioFile != nil else {
+            onStreamingDrained?()
+            sealAndReleaseAudioContinuity()
             return
         }
 
@@ -205,6 +341,15 @@ final class CoreAudioRecorder: @unchecked Sendable {
             }
         }
 
+        // Streaming is the latency-sensitive stop phase. Drain every PCM chunk
+        // accepted before AUHAL stopped, then release provider commit without
+        // waiting for the independent file writer to flush and close.
+        let deliveryStats = audioChunkPipe.stopAndDrain()
+        if deliveryStats.droppedChunks > 0 {
+            logger.error("🎙️ Streaming audio pipe dropped chunks=\(deliveryStats.droppedChunks, privacy: .public) bytes=\(deliveryStats.droppedBytes, privacy: .public)")
+        }
+        onStreamingDrained?()
+
         let fileStats = audioFileWriter.stopAndDrain()
         if fileStats.droppedChunks > 0 {
             logger.error("🎙️ Audio file writer dropped chunks=\(fileStats.droppedChunks, privacy: .public) bytes=\(fileStats.droppedBytes, privacy: .public)")
@@ -213,15 +358,25 @@ final class CoreAudioRecorder: @unchecked Sendable {
             logger.error("🎙️ Audio file writer failed writes=\(fileStats.writeErrors, privacy: .public)")
         }
 
-        let deliveryStats = audioChunkPipe.stopAndDrain()
-        if deliveryStats.droppedChunks > 0 {
-            logger.error("🎙️ Streaming audio pipe dropped chunks=\(deliveryStats.droppedChunks, privacy: .public) bytes=\(deliveryStats.droppedBytes, privacy: .public)")
-        }
-
         closeOutputFile()
         recordingURL = nil
 
         resetMeters()
+        sealAndReleaseAudioContinuity()
+    }
+
+    private func sealAndReleaseAudioContinuity() {
+        guard let continuity = audioContinuity else { return }
+        continuity.sealCapture()
+        let snapshot = continuity.snapshot()
+        if snapshot.hasFileDiscontinuity {
+            logger.error(
+                "Recording file continuity failed droppedChunks=\(snapshot.fileDroppedChunks, privacy: .public) droppedBytes=\(snapshot.fileDroppedBytes, privacy: .public) writeErrors=\(snapshot.fileWriteErrors, privacy: .public)"
+            )
+        }
+        audioFileWriter.setContinuity(nil)
+        audioChunkPipe.setContinuity(nil)
+        audioContinuity = nil
     }
 
     /// Releases the prepared AUHAL and buffers. Use for app shutdown or hard recovery.
@@ -348,6 +503,10 @@ final class CoreAudioRecorder: @unchecked Sendable {
         // Update stored format
         deviceFormat = newDeviceFormat
         currentDeviceID = newDeviceID
+        pcmResampler.reset(
+            inputSampleRate: newDeviceFormat.mSampleRate,
+            outputSampleRate: outputFormat.mSampleRate
+        )
 
         // Step 7: Reinitialize and restart
         status = AudioUnitInitialize(unit)
@@ -525,10 +684,15 @@ final class CoreAudioRecorder: @unchecked Sendable {
         renderBuffer = UnsafeMutablePointer<Float32>.allocate(capacity: Int(bufferSamples))
         renderBufferSize = bufferSamples
 
-        // Pre-allocate conversion buffer (output is always smaller due to downsampling)
+        // Pre-allocate for the configured rate ratio; low-rate devices may
+        // require upsampling, so this cannot assume output is smaller.
         let maxOutputFrames = UInt32(Double(maxFrames) * (outputFormat.mSampleRate / deviceFormat.mSampleRate)) + 1
         conversionBuffer = UnsafeMutablePointer<Int16>.allocate(capacity: Int(maxOutputFrames))
         conversionBufferSize = maxOutputFrames
+        pcmResampler.reset(
+            inputSampleRate: deviceFormat.mSampleRate,
+            outputSampleRate: outputFormat.mSampleRate
+        )
     }
 
     private func setupInputCallback() throws {
@@ -705,16 +869,25 @@ final class CoreAudioRecorder: @unchecked Sendable {
         inNumberFrames: UInt32
     ) -> OSStatus {
 
-        guard let audioUnit = audioUnit, isRecording, let renderBuf = renderBuffer else {
+        guard isRecording else {
+            return noErr
+        }
+        guard let audioUnit = audioUnit, let renderBuf = renderBuffer else {
+            recordCaptureDrop(frameCount: inNumberFrames)
             return noErr
         }
 
         // Use pre-allocated buffer for input data
         let channelCount = deviceFormat.mChannelsPerFrame
+        guard channelCount > 0 else {
+            recordCaptureDrop(frameCount: inNumberFrames)
+            return noErr
+        }
         let requiredSamples = inNumberFrames * channelCount
 
         // Safety check - shouldn't happen with 4096 max frames
         guard requiredSamples <= renderBufferSize else {
+            recordCaptureDrop(frameCount: inNumberFrames)
             return noErr
         }
 
@@ -741,6 +914,7 @@ final class CoreAudioRecorder: @unchecked Sendable {
         )
 
         if status != noErr {
+            recordCaptureDrop(frameCount: inNumberFrames)
             return status
         }
 
@@ -787,63 +961,57 @@ final class CoreAudioRecorder: @unchecked Sendable {
         let inputSampleRate = deviceFormat.mSampleRate
         let outputSampleRate = outputFormat.mSampleRate
 
-        // Get input samples
-        guard let inputData = inputBuffer.mBuffers.mData else { return }
-        let inputSamples = inputData.assumingMemoryBound(to: Float32.self)
-
-        // Calculate output frame count after sample rate conversion
-        let ratio = outputSampleRate / inputSampleRate
-        let outputFrameCount = UInt32(Double(frameCount) * ratio)
-
-        guard outputFrameCount > 0,
-              let outputBuffer = conversionBuffer,
-              outputFrameCount <= conversionBufferSize else { return }
-
-        // Convert Float32 multi-channel → Int16 mono (with sample rate conversion if needed)
-        if inputSampleRate == outputSampleRate {
-            // Direct conversion, just format change and channel mixing
-            for i in 0..<Int(frameCount) {
-                var sample: Float32 = 0
-                // Mix all channels to mono
-                for ch in 0..<Int(inputChannels) {
-                    sample += inputSamples[i * Int(inputChannels) + ch]
-                }
-                sample /= Float32(inputChannels)
-
-                // Convert to Int16 with clipping
-                let scaled = sample * 32767.0
-                let clipped = max(-32768.0, min(32767.0, scaled))
-                outputBuffer[i] = Int16(clipped)
-            }
-        } else {
-            // Sample rate conversion needed - use linear interpolation
-            for i in 0..<Int(outputFrameCount) {
-                let inputIndex = Double(i) / ratio
-                let inputIndexInt = Int(inputIndex)
-                let frac = Float32(inputIndex - Double(inputIndexInt))
-
-                var sample: Float32 = 0
-                let idx1 = min(inputIndexInt, Int(frameCount) - 1)
-                let idx2 = min(inputIndexInt + 1, Int(frameCount) - 1)
-
-                // Mix channels and interpolate
-                for ch in 0..<Int(inputChannels) {
-                    let s1 = inputSamples[idx1 * Int(inputChannels) + ch]
-                    let s2 = inputSamples[idx2 * Int(inputChannels) + ch]
-                    sample += s1 + frac * (s2 - s1)
-                }
-                sample /= Float32(inputChannels)
-
-                // Convert to Int16
-                let scaled = sample * 32767.0
-                let clipped = max(-32768.0, min(32767.0, scaled))
-                outputBuffer[i] = Int16(clipped)
-            }
+        guard inputSampleRate > 0, outputSampleRate > 0 else {
+            recordCaptureDrop(frameCount: frameCount)
+            return
         }
 
-        let byteCount = Int(outputFrameCount) * MemoryLayout<Int16>.size
-        audioFileWriter.enqueue(outputBuffer, byteCount: byteCount)
-        audioChunkPipe.enqueue(outputBuffer, byteCount: byteCount)
+        let estimatedOutputFrameCount = UInt32(
+            ceil(Double(frameCount) * (outputSampleRate / inputSampleRate))
+        )
+        let estimatedOutputByteCount = Int(estimatedOutputFrameCount)
+            * MemoryLayout<Int16>.size
+
+        // Get input samples
+        guard let inputData = inputBuffer.mBuffers.mData else {
+            audioContinuity?.recordCaptureDrop(byteCount: estimatedOutputByteCount)
+            return
+        }
+        let inputSamples = inputData.assumingMemoryBound(to: Float32.self)
+
+        guard let outputBuffer = conversionBuffer else {
+            audioContinuity?.recordCaptureDrop(byteCount: estimatedOutputByteCount)
+            return
+        }
+
+        let outputFrameCount = pcmResampler.process(
+            inputSamples: inputSamples,
+            frameCount: Int(frameCount),
+            channelCount: Int(inputChannels),
+            outputBuffer: outputBuffer,
+            outputCapacity: Int(conversionBufferSize)
+        )
+        guard outputFrameCount >= 0 else {
+            audioContinuity?.recordCaptureDrop(byteCount: estimatedOutputByteCount)
+            return
+        }
+        guard outputFrameCount > 0 else { return }
+
+        let outputByteCount = outputFrameCount * MemoryLayout<Int16>.size
+        audioFileWriter.enqueue(outputBuffer, byteCount: outputByteCount)
+        audioChunkPipe.enqueue(outputBuffer, byteCount: outputByteCount)
+    }
+
+    /// Realtime-safe estimate used only when a render/conversion failure means
+    /// the exact output bytes were never materialized.
+    private func recordCaptureDrop(frameCount: UInt32) {
+        let inputRate = deviceFormat.mSampleRate
+        let outputRate = outputFormat.mSampleRate
+        let ratio = inputRate > 0 && outputRate > 0 ? outputRate / inputRate : 1
+        let estimatedFrames = max(1, UInt32(Double(frameCount) * ratio))
+        audioContinuity?.recordCaptureDrop(
+            byteCount: Int(estimatedFrames) * MemoryLayout<Int16>.size
+        )
     }
 
     // MARK: - Device Info Logging
@@ -878,8 +1046,8 @@ final class CoreAudioRecorder: @unchecked Sendable {
             mElement: kAudioObjectPropertyElementMain
         )
 
-        var propertySize = UInt32(MemoryLayout<CFString>.size)
-        var property: CFString?
+        var propertySize = UInt32(MemoryLayout<Unmanaged<CFString>?>.size)
+        var property: Unmanaged<CFString>?
 
         let status = AudioObjectGetPropertyData(
             deviceID,
@@ -890,8 +1058,8 @@ final class CoreAudioRecorder: @unchecked Sendable {
             &property
         )
 
-        if status == noErr, let cfString = property {
-            return cfString as String
+        if status == noErr, let property {
+            return property.takeUnretainedValue() as String
         }
         return nil
     }
@@ -995,7 +1163,7 @@ final class CoreAudioRecorder: @unchecked Sendable {
     }
 }
 
-private struct RealtimeAudioChunkPipeStats {
+struct RealtimeAudioChunkPipeStats {
     let droppedChunks: Int
     let droppedBytes: Int
 }
@@ -1021,6 +1189,8 @@ private final class RealtimeAudioFileWriter: @unchecked Sendable {
     private var audioFile: ExtAudioFileRef?
     private var scratchBuffer: UnsafeMutableRawPointer?
     private var scratchCapacity = 0
+    /// Set only while the producer is stopped; read from the realtime callback.
+    private var continuity: RecordingAudioContinuity?
 
     init(capacity: Int = 8 * 1024 * 1024) {
         self.capacity = capacity
@@ -1028,6 +1198,10 @@ private final class RealtimeAudioFileWriter: @unchecked Sendable {
             byteCount: capacity,
             alignment: MemoryLayout<UInt32>.alignment
         )
+    }
+
+    func setContinuity(_ continuity: RecordingAudioContinuity?) {
+        self.continuity = continuity
     }
 
     deinit {
@@ -1080,7 +1254,11 @@ private final class RealtimeAudioFileWriter: @unchecked Sendable {
     }
 
     func enqueue(_ bytes: UnsafeRawPointer, byteCount: Int) {
-        guard byteCount > 0, isRunning.load(ordering: .acquiring) else { return }
+        guard byteCount > 0 else { return }
+        guard isRunning.load(ordering: .acquiring) else {
+            recordDrop(byteCount: byteCount)
+            return
+        }
 
         let totalByteCount = byteCount + MemoryLayout<UInt32>.size
         guard totalByteCount <= capacity else {
@@ -1146,6 +1324,7 @@ private final class RealtimeAudioFileWriter: @unchecked Sendable {
             readIndex.store(read + UInt64(totalByteCount), ordering: .releasing)
 
             guard let audioFile else {
+                recordDrop(byteCount: byteCount)
                 continue
             }
 
@@ -1162,6 +1341,7 @@ private final class RealtimeAudioFileWriter: @unchecked Sendable {
             let status = ExtAudioFileWrite(audioFile, frameCount, &outputBufferList)
             if status != noErr {
                 writeErrors.wrappingIncrement(ordering: .relaxed)
+                continuity?.recordFileWriteError()
                 logger.error("🎙️ ExtAudioFileWrite failed with status: \(status, privacy: .public)")
             }
         }
@@ -1191,6 +1371,7 @@ private final class RealtimeAudioFileWriter: @unchecked Sendable {
     private func recordDrop(byteCount: Int) {
         droppedChunks.wrappingIncrement(ordering: .relaxed)
         droppedBytes.wrappingIncrement(by: byteCount, ordering: .relaxed)
+        continuity?.recordFileDrop(byteCount: byteCount)
     }
 
     private func writeToRing(_ source: UnsafeRawPointer, byteCount: Int, at logicalIndex: UInt64) {
@@ -1214,7 +1395,7 @@ private final class RealtimeAudioFileWriter: @unchecked Sendable {
     }
 }
 
-private final class RealtimeAudioChunkPipe: @unchecked Sendable {
+final class RealtimeAudioChunkPipe: @unchecked Sendable {
     private let capacity: Int
     private let storage: UnsafeMutableRawPointer
     private let writeIndex = ManagedAtomic<UInt64>(0)
@@ -1226,7 +1407,9 @@ private final class RealtimeAudioChunkPipe: @unchecked Sendable {
     private let signal = DispatchSemaphore(value: 0)
     private let consumerQueue = DispatchQueue(label: "com.metrovoc.voiceink.audioChunkPipe", qos: .userInitiated)
     private let callbackLock = NSLock()
-    private var _callback: ((Data) -> Void)?
+    private var _callback: RecordingAudioChunkHandler?
+    /// Set only while the producer is stopped; read from the realtime callback.
+    private var continuity: RecordingAudioContinuity?
 
     init(capacity: Int = 2 * 1024 * 1024) {
         self.capacity = capacity
@@ -1236,6 +1419,10 @@ private final class RealtimeAudioChunkPipe: @unchecked Sendable {
         )
     }
 
+    func setContinuity(_ continuity: RecordingAudioContinuity?) {
+        self.continuity = continuity
+    }
+
     deinit {
         isRunning.store(false, ordering: .releasing)
         signal.signal()
@@ -1243,7 +1430,7 @@ private final class RealtimeAudioChunkPipe: @unchecked Sendable {
         storage.deallocate()
     }
 
-    var callback: ((Data) -> Void)? {
+    var callback: RecordingAudioChunkHandler? {
         get {
             callbackLock.lock()
             defer { callbackLock.unlock() }
@@ -1259,6 +1446,8 @@ private final class RealtimeAudioChunkPipe: @unchecked Sendable {
 
     func start() {
         reset()
+        droppedChunks.store(0, ordering: .releasing)
+        droppedBytes.store(0, ordering: .releasing)
         guard !isRunning.exchange(true, ordering: .acquiringAndReleasing) else {
             return
         }
@@ -1285,7 +1474,12 @@ private final class RealtimeAudioChunkPipe: @unchecked Sendable {
     }
 
     func enqueue(_ bytes: UnsafeRawPointer, byteCount: Int) {
-        guard byteCount > 0, hasCallback.load(ordering: .acquiring) else { return }
+        guard byteCount > 0 else { return }
+        guard isRunning.load(ordering: .acquiring),
+              hasCallback.load(ordering: .acquiring) else {
+            recordDrop(byteCount: byteCount)
+            return
+        }
 
         let totalByteCount = byteCount + MemoryLayout<UInt32>.size
         guard totalByteCount <= capacity else {
@@ -1336,6 +1530,13 @@ private final class RealtimeAudioChunkPipe: @unchecked Sendable {
                 return
             }
 
+            let currentCallback = callback
+            guard let currentCallback else {
+                readIndex.store(read + UInt64(totalByteCount), ordering: .releasing)
+                recordDrop(byteCount: byteCount)
+                continue
+            }
+
             var data = Data(count: byteCount)
             data.withUnsafeMutableBytes { destination in
                 guard let baseAddress = destination.baseAddress else { return }
@@ -1345,8 +1546,11 @@ private final class RealtimeAudioChunkPipe: @unchecked Sendable {
                     at: read + UInt64(MemoryLayout<UInt32>.size)
                 )
             }
+            // Do not release this ring region to the realtime producer until
+            // its payload has been copied. Advancing first would permit the
+            // producer to overwrite bytes while Data is still reading them.
             readIndex.store(read + UInt64(totalByteCount), ordering: .releasing)
-            callback?(data)
+            currentCallback(data)
         }
     }
 
@@ -1356,8 +1560,12 @@ private final class RealtimeAudioChunkPipe: @unchecked Sendable {
     }
 
     private func recordDrop(byteCount: Int) {
+        if let continuity, !continuity.isStreamingTrackingEnabled {
+            return
+        }
         droppedChunks.wrappingIncrement(ordering: .relaxed)
         droppedBytes.wrappingIncrement(by: byteCount, ordering: .relaxed)
+        continuity?.recordStreamingDrop(byteCount: byteCount)
     }
 
     private func writeToRing(_ source: UnsafeRawPointer, byteCount: Int, at logicalIndex: UInt64) {

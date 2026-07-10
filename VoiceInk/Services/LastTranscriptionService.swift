@@ -133,7 +133,7 @@ class LastTranscriptionService: ObservableObject {
                 )
 
                 let textToCopy = newTranscription.enhancedText?.isEmpty == false ? newTranscription.enhancedText! : newTranscription.text
-                ClipboardManager.copyToClipboard(textToCopy)
+                _ = ClipboardManager.copyToClipboard(textToCopy)
 
                 NotificationManager.shared.showNotification(
                     title: String(localized: "Copied to clipboard"),

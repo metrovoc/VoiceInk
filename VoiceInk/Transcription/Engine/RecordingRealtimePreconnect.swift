@@ -1,9 +1,9 @@
 import Foundation
 
-struct PreparedRealtimeSession {
+struct PreparedRealtimeSession: @unchecked Sendable {
     let configuration: TranscriptionRuntimeConfiguration
     let session: TranscriptionSession
-    let audioChunkCallback: (Data) -> Void
+    let audioChunkCallback: RecordingAudioChunkHandler
 }
 
 struct EarlyRealtimePreconnect {
@@ -23,7 +23,7 @@ enum RecordingRealtimePreconnectLifecycle {
             _ prepareDuration: TimeInterval
         ) -> Void = { _, _, _ in }
     ) -> EarlyRealtimePreconnect {
-        let task = Task { @MainActor in
+        let task = Task(priority: .userInitiated) { @MainActor in
             let preconnectStartedAt = ProcessInfo.processInfo.systemUptime
             try Task.checkCancellation()
             let preparedSession = try await prepare()

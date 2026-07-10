@@ -1,22 +1,21 @@
 import Foundation
-import SwiftData
 import LLMkit
 
 /// Speechmatics streaming provider wrapping `LLMkit.SpeechmaticsStreamingClient`.
-final class SpeechmaticsStreamingProvider: StreamingTranscriptionProvider {
+final class SpeechmaticsStreamingProvider: StreamingTranscriptionProvider, @unchecked Sendable {
 
     private let client = LLMkit.SpeechmaticsStreamingClient()
-    private var eventsContinuation: AsyncStream<StreamingTranscriptionEvent>.Continuation?
+    private var eventsContinuation: StreamingProviderEventRelay?
     private var forwardingTask: Task<Void, Never>?
-    private let modelContext: ModelContext
+    private let customVocabulary: [String]
 
     private(set) var transcriptionEvents: AsyncStream<StreamingTranscriptionEvent>
 
-    init(modelContext: ModelContext) {
-        self.modelContext = modelContext
-        var continuation: AsyncStream<StreamingTranscriptionEvent>.Continuation!
-        transcriptionEvents = AsyncStream { continuation = $0 }
-        eventsContinuation = continuation
+    init(customVocabulary: [String]) {
+        self.customVocabulary = customVocabulary
+        let relay = StreamingProviderEventRelay()
+        transcriptionEvents = relay.stream
+        eventsContinuation = relay
     }
 
     deinit {
@@ -29,15 +28,13 @@ final class SpeechmaticsStreamingProvider: StreamingTranscriptionProvider {
             throw StreamingTranscriptionError.missingAPIKey
         }
 
-        let vocabulary = getCustomVocabularyTerms()
-
         // Cancel any existing forwarding task before starting a new one
         forwardingTask?.cancel()
         startEventForwarding()
 
         do {
             let operatingPoint = model.name.contains("standard") ? "standard" : "enhanced"
-            try await client.connect(apiKey: apiKey, model: operatingPoint, language: language, customVocabulary: vocabulary)
+            try await client.connect(apiKey: apiKey, model: operatingPoint, language: language, customVocabulary: customVocabulary)
         } catch {
             // Clean up forwarding task on connection failure
             forwardingTask?.cancel()
@@ -82,30 +79,13 @@ final class SpeechmaticsStreamingProvider: StreamingTranscriptionProvider {
                     self.eventsContinuation?.yield(.partial(text: text))
                 case .committed(let text):
                     self.eventsContinuation?.yield(.committed(text: text))
+                case .finalized:
+                    self.eventsContinuation?.yield(.finalized)
                 case .error(let message):
                     self.eventsContinuation?.yield(.error(StreamingTranscriptionError.serverError(message)))
                 }
             }
         }
-    }
-
-    private func getCustomVocabularyTerms() -> [String] {
-        let descriptor = FetchDescriptor<VocabularyWord>(sortBy: [SortDescriptor(\.word)])
-        guard let vocabularyWords = try? modelContext.fetch(descriptor) else {
-            return []
-        }
-        var seen = Set<String>()
-        var unique: [String] = []
-        for word in vocabularyWords {
-            let trimmed = word.word.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !trimmed.isEmpty else { continue }
-            let key = trimmed.lowercased()
-            if !seen.contains(key) {
-                seen.insert(key)
-                unique.append(trimmed)
-            }
-        }
-        return unique
     }
 
     private func mapError(_ error: Error) -> Error {
@@ -118,7 +98,7 @@ final class SpeechmaticsStreamingProvider: StreamingTranscriptionProvider {
         case .networkError(let detail):
             return StreamingTranscriptionError.connectionFailed(detail)
         default:
-            return StreamingTranscriptionError.serverError(llmError.localizedDescription ?? "Unknown error")
+            return StreamingTranscriptionError.serverError(llmError.localizedDescription)
         }
     }
 }

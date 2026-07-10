@@ -5,6 +5,7 @@ import LLMkit
 struct DeepgramProvider: CloudProvider {
     let modelProvider: ModelProvider = .deepgram
     let providerKey: String = "Deepgram"
+    let usesStreamingVocabulary = true
     let languageCodes: [String]? = [
         "ar", "be", "bg", "bn", "bs", "ca", "cs", "da", "de", "el",
         "en", "es", "et", "fa", "fi", "fr", "he", "hi", "hr", "hu",
@@ -48,8 +49,8 @@ struct DeepgramProvider: CloudProvider {
         )
     }
 
-    func makeStreamingProvider(modelContext: ModelContext) -> (any StreamingTranscriptionProvider)? {
-        DeepgramStreamingProvider(modelContext: modelContext)
+    func makeStreamingProvider(customVocabulary: [String]) -> (any StreamingTranscriptionProvider)? {
+        DeepgramStreamingProvider(customVocabulary: customVocabulary)
     }
 
     func verifyAPIKey(_ key: String) async -> (isValid: Bool, errorMessage: String?) {

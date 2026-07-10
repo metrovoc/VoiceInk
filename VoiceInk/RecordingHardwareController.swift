@@ -97,46 +97,135 @@ final class RecordingHardwareStartCoordinator: @unchecked Sendable {
     }
 }
 
-struct RecordingAudioMeterPublishGate: Equatable {
-    let minimumDbDelta: Double
-    let maximumInterval: TimeInterval
+final class RecordingHardwareStopHandle: @unchecked Sendable {
+    private let lock = NSLock()
+    private var isStreamingDrained: Bool
+    private var isFinished: Bool
+    private var streamingWaiters: [CheckedContinuation<Void, Never>] = []
+    private var finishWaiters: [CheckedContinuation<Void, Never>] = []
 
-    private var lastPublishedMeter: AudioMeter?
-    private var lastPublishedTime: TimeInterval?
-
-    init(minimumDbDelta: Double = 0.75, maximumInterval: TimeInterval = 0.20) {
-        self.minimumDbDelta = minimumDbDelta
-        self.maximumInterval = maximumInterval
+    init(isFinished: Bool = false) {
+        self.isStreamingDrained = isFinished
+        self.isFinished = isFinished
     }
 
-    mutating func shouldPublish(_ meter: AudioMeter, at time: TimeInterval) -> Bool {
-        guard let lastPublishedMeter, let lastPublishedTime else {
-            recordPublish(meter, at: time)
-            return true
+    /// Resolves as soon as AUHAL has stopped and every PCM chunk already
+    /// accepted by the streaming handoff has reached its callback. Provider
+    /// commit may begin at this point while file draining continues.
+    func streamingValue() async {
+        await withCheckedContinuation { continuation in
+            lock.lock()
+            if isStreamingDrained {
+                lock.unlock()
+                continuation.resume()
+            } else {
+                streamingWaiters.append(continuation)
+                lock.unlock()
+            }
         }
+    }
 
-        let averageDelta = abs(meter.averagePower - lastPublishedMeter.averagePower)
-        let peakDelta = abs(meter.peakPower - lastPublishedMeter.peakPower)
-        let elapsed = time - lastPublishedTime
-        let shouldPublish = averageDelta >= minimumDbDelta
-            || peakDelta >= minimumDbDelta
-            || elapsed < 0
-            || elapsed >= maximumInterval
-
-        if shouldPublish {
-            recordPublish(meter, at: time)
+    func value() async {
+        await withCheckedContinuation { continuation in
+            lock.lock()
+            if isFinished {
+                lock.unlock()
+                continuation.resume()
+            } else {
+                finishWaiters.append(continuation)
+                lock.unlock()
+            }
         }
-        return shouldPublish
     }
 
-    mutating func reset() {
-        lastPublishedMeter = nil
-        lastPublishedTime = nil
+    func finishStreaming() {
+        lock.lock()
+        guard !isStreamingDrained else {
+            lock.unlock()
+            return
+        }
+        isStreamingDrained = true
+        let waiters = streamingWaiters
+        streamingWaiters.removeAll(keepingCapacity: false)
+        lock.unlock()
+
+        for waiter in waiters {
+            waiter.resume()
+        }
     }
 
-    private mutating func recordPublish(_ meter: AudioMeter, at time: TimeInterval) {
-        lastPublishedMeter = meter
-        lastPublishedTime = time
+    func finish() {
+        // A fully stopped recorder necessarily crossed the streaming barrier.
+        // Resolve it first so phase ordering remains deterministic even when a
+        // low-level failure skips the normal callback.
+        finishStreaming()
+
+        lock.lock()
+        guard !isFinished else {
+            lock.unlock()
+            return
+        }
+        isFinished = true
+        let waiters = finishWaiters
+        finishWaiters.removeAll(keepingCapacity: false)
+        lock.unlock()
+
+        for waiter in waiters {
+            waiter.resume()
+        }
+    }
+}
+
+/// One physical AUHAL drain per recording generation. The first request
+/// enqueues synchronously so provider commit can begin in parallel; all later
+/// callers receive and await the same completion handle, including callers
+/// arriving after the drain has already completed.
+final class RecordingHardwareStopCoordinator: @unchecked Sendable {
+    private enum Key: Hashable {
+        case generation(UUID)
+        case unscoped
+    }
+
+    private let lock = NSLock()
+    private var activeGenerationID: UUID?
+    private var handles: [Key: RecordingHardwareStopHandle] = [:]
+
+    func activate(generationID: UUID) {
+        lock.lock()
+        activeGenerationID = generationID
+        handles.removeAll(keepingCapacity: true)
+        lock.unlock()
+    }
+
+    func request(
+        generationID: UUID?,
+        enqueue: (
+            @escaping @Sendable () -> Void,
+            @escaping @Sendable () -> Void
+        ) -> Void
+    ) -> RecordingHardwareStopHandle {
+        let key = generationID.map(Key.generation) ?? .unscoped
+
+        lock.lock()
+        if let generationID,
+           let activeGenerationID,
+           generationID != activeGenerationID {
+            lock.unlock()
+            return RecordingHardwareStopHandle(isFinished: true)
+        }
+        if let handle = handles[key] {
+            lock.unlock()
+            return handle
+        }
+        let handle = RecordingHardwareStopHandle()
+        handles[key] = handle
+        lock.unlock()
+
+        enqueue(
+            { handle.finishStreaming() },
+            { handle.finish() }
+        )
+        return handle
     }
 }
 
@@ -152,20 +241,20 @@ final class RecordingHardwareController: @unchecked Sendable {
     private var recorder: CoreAudioRecorder?
 
     private let callbackLock = NSLock()
-    private var audioChunkCallback: ((_ data: Data) -> Void)?
-    private var audioMeterCallback: ((AudioMeter) -> Void)?
+    private var audioChunkCallback: RecordingAudioChunkHandler?
+    private var audioMeterCallback: (@Sendable (AudioMeter) -> Void)?
 
     private let warmUpLock = NSLock()
     private var pendingWarmUpWorkItem: DispatchWorkItem?
 
     private let startCoordinator = RecordingHardwareStartCoordinator()
+    private let stopCoordinator = RecordingHardwareStopCoordinator()
 
-    private let audioMeterPublishLock = NSLock()
+    private let audioMeterGenerationLock = NSLock()
     private let audioMeterTimerLock = NSLock()
     private var audioMeterUpdateTimer: DispatchSourceTimer?
     private var audioMeterStopRequestGeneration: UInt64 = 0
-    private var audioMeterPublishGeneration: UInt64 = 0
-    private var audioMeterPublishGate = RecordingAudioMeterPublishGate()
+    private var audioMeterGeneration: UInt64 = 0
 
     deinit {
         stopAudioMeterTimer()
@@ -176,7 +265,7 @@ final class RecordingHardwareController: @unchecked Sendable {
         }
     }
 
-    func setAudioChunkCallback(_ callback: ((_ data: Data) -> Void)?) {
+    func setAudioChunkCallback(_ callback: RecordingAudioChunkHandler?) {
         callbackLock.lock()
         audioChunkCallback = callback
         callbackLock.unlock()
@@ -186,18 +275,26 @@ final class RecordingHardwareController: @unchecked Sendable {
         }
     }
 
-    func setAudioMeterCallback(_ callback: ((AudioMeter) -> Void)?) {
+    func setAudioMeterCallback(_ callback: (@Sendable (AudioMeter) -> Void)?) {
         callbackLock.lock()
         audioMeterCallback = callback
         callbackLock.unlock()
     }
 
-    func beginStartRecording(toOutputFile url: URL) -> RecordingHardwareStartHandle {
+    func beginStartRecording(
+        toOutputFile url: URL,
+        continuity: RecordingAudioContinuity
+    ) -> RecordingHardwareStartHandle {
+        stopCoordinator.activate(generationID: continuity.sessionID)
         let token = RecordingHardwareStartToken()
         startCoordinator.activate(token)
         let task = Task(priority: .userInitiated) { [weak self, token] in
             guard let self else { throw CancellationError() }
-            return try await self.startRecording(toOutputFile: url, token: token)
+            return try await self.startRecording(
+                toOutputFile: url,
+                continuity: continuity,
+                token: token
+            )
         }
         return RecordingHardwareStartHandle(task: task) { [weak self, token] in
             token.cancel()
@@ -205,12 +302,19 @@ final class RecordingHardwareController: @unchecked Sendable {
         }
     }
 
-    func startRecording(toOutputFile url: URL) async throws -> RecordingHardwareStartResult {
-        try await beginStartRecording(toOutputFile: url).value()
+    func startRecording(
+        toOutputFile url: URL,
+        continuity: RecordingAudioContinuity
+    ) async throws -> RecordingHardwareStartResult {
+        try await beginStartRecording(
+            toOutputFile: url,
+            continuity: continuity
+        ).value()
     }
 
     private func startRecording(
         toOutputFile url: URL,
+        continuity: RecordingAudioContinuity,
         token: RecordingHardwareStartToken
     ) async throws -> RecordingHardwareStartResult {
         #if DEBUG
@@ -250,7 +354,11 @@ final class RecordingHardwareController: @unchecked Sendable {
 
                         let coreAudioRecorder = self.recorderOnQueue()
                         coreAudioRecorder.onAudioChunk = self.currentAudioChunkCallback()
-                        try coreAudioRecorder.startRecording(toOutputFile: url, deviceID: device.id) {
+                        try coreAudioRecorder.startRecording(
+                            toOutputFile: url,
+                            deviceID: device.id,
+                            continuity: continuity
+                        ) {
                             !self.startCoordinator.isActive(token)
                         }
                         try self.startCoordinator.checkActive(token)
@@ -291,17 +399,37 @@ final class RecordingHardwareController: @unchecked Sendable {
         }
     }
 
-    func stopRecording() async {
-        await withCheckedContinuation { continuation in
-            enqueueStopRecording(onStopped: continuation.resume)
-        }
+    func stopRecording(generationID: UUID? = nil) async {
+        await stopRecordingHardware(generationID: generationID)
+        finishStopRecording()
+    }
 
+    /// Drains/stops AUHAL without publishing presentation state or scheduling
+    /// post-stop warm-up. `Recorder` uses this split operation so it can
+    /// revalidate generation ownership after the suspension point first.
+    func stopRecordingHardware(generationID: UUID? = nil) async {
+        let handle = requestStopRecording(generationID: generationID)
+        await handle.value()
+    }
+
+    func finishStopRecording() {
         publishAudioMeter(AudioMeter(averagePower: -160, peakPower: -160))
         warmUpForCurrentDevice(reason: "post-stop")
     }
 
-    func requestStopRecording() {
-        enqueueStopRecording()
+    @discardableResult
+    func requestStopRecording(generationID: UUID? = nil) -> RecordingHardwareStopHandle {
+        stopCoordinator.request(generationID: generationID) { [weak self] streamingDrained, completion in
+            guard let self else {
+                streamingDrained()
+                completion()
+                return
+            }
+            self.enqueueStopRecording(
+                onStreamingDrained: streamingDrained,
+                onStopped: completion
+            )
+        }
     }
 
     func warmUpForCurrentDevice(reason: String) {
@@ -371,15 +499,27 @@ final class RecordingHardwareController: @unchecked Sendable {
         }
     }
 
-    private func enqueueStopRecording(onStopped: (() -> Void)? = nil) {
+    private func enqueueStopRecording(
+        onStreamingDrained: (@Sendable () -> Void)? = nil,
+        onStopped: (@Sendable () -> Void)? = nil
+    ) {
         startCoordinator.cancelActive()
         cancelPendingWarmUp()
         stopAudioMeterTimer(markStopRequest: true)
 
         audioSetupQueue.async { [weak self] in
-            self?.recorderSnapshot()?.stopRecording()
-            self?.stopAudioMeterTimer()
-            self?.deviceManager.isRecordingActive = false
+            guard let self else {
+                onStreamingDrained?()
+                onStopped?()
+                return
+            }
+            if let recorder = self.recorderSnapshot() {
+                recorder.stopRecording(onStreamingDrained: onStreamingDrained)
+            } else {
+                onStreamingDrained?()
+            }
+            self.stopAudioMeterTimer()
+            self.deviceManager.isRecordingActive = false
             onStopped?()
         }
     }
@@ -391,13 +531,13 @@ final class RecordingHardwareController: @unchecked Sendable {
         warmUpLock.unlock()
     }
 
-    private func currentAudioChunkCallback() -> ((_ data: Data) -> Void)? {
+    private func currentAudioChunkCallback() -> RecordingAudioChunkHandler? {
         callbackLock.lock()
         defer { callbackLock.unlock() }
         return audioChunkCallback
     }
 
-    private func currentAudioMeterCallback() -> ((AudioMeter) -> Void)? {
+    private func currentAudioMeterCallback() -> (@Sendable (AudioMeter) -> Void)? {
         callbackLock.lock()
         defer { callbackLock.unlock() }
         return audioMeterCallback
@@ -435,9 +575,13 @@ final class RecordingHardwareController: @unchecked Sendable {
             return false
         }
 
-        let generation = resetAudioMeterPublishingState()
+        let generation = advanceAudioMeterGeneration()
         let timer = DispatchSource.makeTimerSource(queue: audioMeterQueue)
-        timer.schedule(deadline: .now(), repeating: .milliseconds(33))
+        timer.schedule(
+            deadline: .now(),
+            repeating: .nanoseconds(AudioMeterCadence.intervalNanoseconds),
+            leeway: .milliseconds(1)
+        )
         timer.setEventHandler { [weak self] in
             self?.updateAudioMeter(generation: generation)
         }
@@ -458,7 +602,7 @@ final class RecordingHardwareController: @unchecked Sendable {
         audioMeterTimerLock.unlock()
 
         timer?.cancel()
-        _ = resetAudioMeterPublishingState()
+        _ = advanceAudioMeterGeneration()
     }
 
     private func currentAudioMeterStopRequestGeneration() -> UInt64 {
@@ -475,23 +619,19 @@ final class RecordingHardwareController: @unchecked Sendable {
             averagePower: Double(recorder.averagePower),
             peakPower: Double(recorder.peakPower)
         )
-        let now = ProcessInfo.processInfo.systemUptime
+        audioMeterGenerationLock.lock()
+        let isCurrentGeneration = generation == audioMeterGeneration
+        audioMeterGenerationLock.unlock()
 
-        audioMeterPublishLock.lock()
-        let shouldPublish = generation == audioMeterPublishGeneration
-            && audioMeterPublishGate.shouldPublish(newAudioMeter, at: now)
-        audioMeterPublishLock.unlock()
-
-        guard shouldPublish else { return }
+        guard isCurrentGeneration else { return }
         publishAudioMeter(newAudioMeter)
     }
 
-    private func resetAudioMeterPublishingState() -> UInt64 {
-        audioMeterPublishLock.lock()
-        audioMeterPublishGeneration &+= 1
-        audioMeterPublishGate.reset()
-        let generation = audioMeterPublishGeneration
-        audioMeterPublishLock.unlock()
+    private func advanceAudioMeterGeneration() -> UInt64 {
+        audioMeterGenerationLock.lock()
+        audioMeterGeneration &+= 1
+        let generation = audioMeterGeneration
+        audioMeterGenerationLock.unlock()
         return generation
     }
 
@@ -694,8 +834,8 @@ private struct RecordingInputDeviceResolver {
             mElement: kAudioObjectPropertyElementMain
         )
 
-        var propertySize = UInt32(MemoryLayout<CFString>.size)
-        var property = "" as CFString
+        var propertySize = UInt32(MemoryLayout<Unmanaged<CFString>?>.size)
+        var property: Unmanaged<CFString>?
 
         let status = AudioObjectGetPropertyData(
             deviceID,
@@ -706,7 +846,7 @@ private struct RecordingInputDeviceResolver {
             &property
         )
 
-        guard status == noErr else { return nil }
-        return property as String
+        guard status == noErr, let property else { return nil }
+        return property.takeUnretainedValue() as String
     }
 }

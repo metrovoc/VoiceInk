@@ -157,7 +157,7 @@ enum ModeRuntimeResolver {
         transcriptionModelManager: TranscriptionModelManager
     ) -> (any TranscriptionModel)? {
         if let modelName,
-           let model = transcriptionModelManager.usableModels.first(where: { $0.name == modelName }) {
+           let model = transcriptionModelManager.usableModel(named: modelName) {
             return model
         }
 

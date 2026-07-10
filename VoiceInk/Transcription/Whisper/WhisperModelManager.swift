@@ -36,7 +36,7 @@ struct WhisperModelFile: Identifiable {
 
 // MARK: - Private download task delegate
 
-private class TaskDelegate: NSObject, URLSessionTaskDelegate {
+private final class TaskDelegate: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
     private let continuation: CheckedContinuation<Void, Never>
     private let finished = ManagedAtomic(false)
 
@@ -51,6 +51,24 @@ private class TaskDelegate: NSObject, URLSessionTaskDelegate {
     }
 }
 
+private final class DownloadProgressPublicationGate: @unchecked Sendable {
+    private let lock = NSLock()
+    private var lastUpdateTime = Date()
+    private var lastProgressValue: Double = 0
+
+    func shouldPublish(_ progress: Double, at time: Date) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        guard time.timeIntervalSince(lastUpdateTime) >= 0.5,
+              abs(progress - lastProgressValue) >= 0.01 else {
+            return false
+        }
+        lastUpdateTime = time
+        lastProgressValue = progress
+        return true
+    }
+}
+
 // MARK: - WhisperModelManager
 
 @MainActor
@@ -61,6 +79,15 @@ class WhisperModelManager: ObservableObject {
     @Published var isModelLoaded = false
     @Published var loadedWhisperModel: WhisperModelFile?
     @Published var isModelLoading = false
+
+    private struct ActiveModelLoad {
+        let modelName: String
+        let generation: UInt64
+        let task: Task<WhisperContext, Error>
+    }
+
+    private var modelLoadGeneration: UInt64 = 0
+    private var activeModelLoad: ActiveModelLoad?
 
     let modelsDirectory: URL
     let whisperPrompt = WhisperPrompt()
@@ -104,21 +131,101 @@ class WhisperModelManager: ObservableObject {
     // MARK: - Model Loading
 
     func loadModel(_ model: WhisperModelFile) async throws {
-        guard whisperContext == nil else { return }
+        if whisperContext != nil, loadedWhisperModel?.name == model.name {
+            return
+        }
 
-        isModelLoading = true
-        defer { isModelLoading = false }
+        let load: ActiveModelLoad
+        if let activeModelLoad, activeModelLoad.modelName == model.name {
+            load = activeModelLoad
+        } else {
+            modelLoadGeneration &+= 1
+            let generation = modelLoadGeneration
+            activeModelLoad?.task.cancel()
+            activeModelLoad = nil
+
+            let previousContext = whisperContext
+            whisperContext = nil
+            loadedWhisperModel = nil
+            isModelLoaded = false
+            if let previousContext {
+                await previousContext.releaseResources()
+            }
+            guard generation == modelLoadGeneration else {
+                throw CancellationError()
+            }
+
+            isModelLoading = true
+            let path = model.url.path
+            let task = Task.detached(priority: .userInitiated) {
+                try await WhisperContext.createContext(path: path)
+            }
+            let newLoad = ActiveModelLoad(
+                modelName: model.name,
+                generation: generation,
+                task: task
+            )
+            activeModelLoad = newLoad
+            load = newLoad
+        }
 
         do {
-            whisperContext = try await WhisperContext.createContext(path: model.url.path)
-
-            let currentPrompt = UserDefaults.standard.string(forKey: "TranscriptionPrompt") ?? whisperPrompt.transcriptionPrompt
-            await whisperContext?.setPrompt(currentPrompt)
-
-            isModelLoaded = true
-            loadedWhisperModel = model
+            let context = try await load.task.value
+            try await installLoadedContext(
+                context,
+                model: model,
+                generation: load.generation
+            )
+        } catch is CancellationError {
+            throw CancellationError()
         } catch {
+            if activeModelLoad?.generation == load.generation {
+                activeModelLoad = nil
+                isModelLoading = false
+            }
             throw VoiceInkEngineError.modelLoadFailed
+        }
+    }
+
+    func context(forModelNamed name: String) async throws -> WhisperContext {
+        guard let model = availableModels.first(where: { $0.name == name }) else {
+            throw VoiceInkEngineError.modelLoadFailed
+        }
+        try await loadModel(model)
+        guard let context = whisperContext,
+              loadedWhisperModel?.name == name else {
+            throw VoiceInkEngineError.modelLoadFailed
+        }
+        return context
+    }
+
+    private func installLoadedContext(
+        _ context: WhisperContext,
+        model: WhisperModelFile,
+        generation: UInt64
+    ) async throws {
+        if whisperContext === context, loadedWhisperModel?.name == model.name {
+            return
+        }
+        guard generation == modelLoadGeneration else {
+            await context.releaseResources()
+            throw CancellationError()
+        }
+
+        let currentPrompt = UserDefaults.standard.string(forKey: "TranscriptionPrompt")
+            ?? whisperPrompt.transcriptionPrompt
+        await context.setPrompt(currentPrompt)
+
+        guard generation == modelLoadGeneration else {
+            await context.releaseResources()
+            throw CancellationError()
+        }
+        whisperContext = context
+        isModelLoaded = true
+        loadedWhisperModel = model
+        if activeModelLoad?.generation == generation {
+            activeModelLoad = nil
+            isModelLoading = false
         }
     }
 
@@ -130,7 +237,7 @@ class WhisperModelManager: ObservableObject {
         return try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Data, Error>) in
             let finished = ManagedAtomic(false)
 
-            func finishOnce(_ result: Result<Data, Error>) {
+            let finishOnce: @Sendable (Result<Data, Error>) -> Void = { result in
                 if finished.exchange(true, ordering: .acquiring) == false {
                     continuation.resume(with: result)
                 }
@@ -161,33 +268,26 @@ class WhisperModelManager: ObservableObject {
 
             task.resume()
 
-            var lastUpdateTime = Date()
-            var lastProgressValue: Double = 0
+            let publicationGate = DownloadProgressPublicationGate()
 
             let observation = task.progress.observe(\.fractionCompleted) { progress, _ in
                 let currentTime = Date()
-                let timeSinceLastUpdate = currentTime.timeIntervalSince(lastUpdateTime)
                 let currentProgress = round(progress.fractionCompleted * 100) / 100
 
-                if timeSinceLastUpdate >= 0.5 && abs(currentProgress - lastProgressValue) >= 0.01 {
-                    lastUpdateTime = currentTime
-                    lastProgressValue = currentProgress
-
-                    DispatchQueue.main.async {
-                        self.downloadProgress[progressKey] = currentProgress
+                if publicationGate.shouldPublish(currentProgress, at: currentTime) {
+                    Task { @MainActor [weak self] in
+                        self?.downloadProgress[progressKey] = currentProgress
                     }
                 }
             }
 
             Task {
-                await withTaskCancellationHandler {
-                    observation.invalidate()
-                    if finished.exchange(true, ordering: .acquiring) == false {
-                        continuation.resume(throwing: CancellationError())
-                    }
-                } operation: {
+                await withTaskCancellationHandler(operation: {
                     await withCheckedContinuation { (_: CheckedContinuation<Void, Never>) in }
-                }
+                }, onCancel: {
+                    observation.invalidate()
+                    finishOnce(.failure(CancellationError()))
+                })
             }
         }
     }
@@ -315,10 +415,16 @@ class WhisperModelManager: ObservableObject {
     }
 
     func unloadModel() {
-        Task {
-            await whisperContext?.releaseResources()
-            whisperContext = nil
-            isModelLoaded = false
+        modelLoadGeneration &+= 1
+        activeModelLoad?.task.cancel()
+        activeModelLoad = nil
+        isModelLoading = false
+        let context = whisperContext
+        whisperContext = nil
+        loadedWhisperModel = nil
+        isModelLoaded = false
+        Task.detached(priority: .utility) {
+            await context?.releaseResources()
         }
     }
 
@@ -339,9 +445,15 @@ class WhisperModelManager: ObservableObject {
     /// Does NOT call serviceRegistry.cleanup() — that is VoiceInkEngine's responsibility.
     func cleanupResources() async {
         logger.notice("WhisperModelManager.cleanupResources: releasing whisper context")
-        await whisperContext?.releaseResources()
+        modelLoadGeneration &+= 1
+        activeModelLoad?.task.cancel()
+        activeModelLoad = nil
+        isModelLoading = false
+        let context = whisperContext
         whisperContext = nil
+        loadedWhisperModel = nil
         isModelLoaded = false
+        await context?.releaseResources()
         logger.notice("WhisperModelManager.cleanupResources: completed")
     }
 
@@ -354,7 +466,7 @@ class WhisperModelManager: ObservableObject {
         let destinationURL = modelsDirectory.appendingPathComponent("\(baseName).bin")
 
         if FileManager.default.fileExists(atPath: destinationURL.path) {
-            await NotificationManager.shared.showNotification(
+            NotificationManager.shared.showNotification(
                 title: String(format: String(localized: "A model named %@.bin already exists"), baseName),
                 type: .warning,
                 duration: 4.0
@@ -371,14 +483,14 @@ class WhisperModelManager: ObservableObject {
 
             onModelsChanged?()
 
-            await NotificationManager.shared.showNotification(
+            NotificationManager.shared.showNotification(
                 title: String(format: String(localized: "Imported %@"), destinationURL.lastPathComponent),
                 type: .success,
                 duration: 3.0
             )
         } catch {
             logError("Failed to import local model", error)
-            await NotificationManager.shared.showNotification(
+            NotificationManager.shared.showNotification(
                 title: String(format: String(localized: "Failed to import model: %@"), error.localizedDescription),
                 type: .error,
                 duration: 5.0

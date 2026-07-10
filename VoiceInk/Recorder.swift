@@ -16,12 +16,17 @@ final class Recorder: NSObject, ObservableObject {
     private let playbackController = PlaybackController.shared
     private var microphonePermissionObserver: NSObjectProtocol?
     private var appActivationObserver: NSObjectProtocol?
-    @Published var audioMeter = AudioMeter(averagePower: -160, peakPower: -160)
+    /// Lock-protected latest-value handoff read by the recorder UI's display clock.
+    /// Meter samples never need to hop through MainActor or invalidate the recorder.
+    let audioMeterSource = AudioMeterSource()
     private let audioTaskCoordinator = RecordingAudioTaskCoordinator()
+    /// MainActor generation owner used to keep a resumed old stop from
+    /// clearing callbacks or restoring media for a newer recording.
+    private var activeRecordingContinuity: RecordingAudioContinuity?
 
     /// Audio chunk callback for streaming. Can be updated while recording;
     /// changes are forwarded to the live CoreAudioRecorder.
-    var onAudioChunk: ((_ data: Data) -> Void)? {
+    var onAudioChunk: RecordingAudioChunkHandler? {
         didSet { hardwareController.setAudioChunkCallback(onAudioChunk) }
     }
     
@@ -31,10 +36,9 @@ final class Recorder: NSObject, ObservableObject {
     
     override init() {
         super.init()
-        hardwareController.setAudioMeterCallback { [weak self] meter in
-            DispatchQueue.main.async {
-                self?.audioMeter = meter
-            }
+        let audioMeterSource = audioMeterSource
+        hardwareController.setAudioMeterCallback { meter in
+            audioMeterSource.store(meter)
         }
         setupDeviceSwitchObserver()
         setupAudioDeviceChangedObserver()
@@ -49,7 +53,7 @@ final class Recorder: NSObject, ObservableObject {
             object: nil,
             queue: .main
         ) { [weak self] notification in
-            Task {
+            Task { @MainActor in
                 await self?.handleDeviceSwitchRequired(notification)
             }
         }
@@ -61,7 +65,7 @@ final class Recorder: NSObject, ObservableObject {
             object: nil,
             queue: .main
         ) { [weak self] _ in
-            Task {
+            Task { @MainActor in
                 guard let self, !self.deviceManager.isRecordingActive else { return }
                 self.warmUpForCurrentDevice(reason: "device-changed")
             }
@@ -74,7 +78,7 @@ final class Recorder: NSObject, ObservableObject {
             object: nil,
             queue: .main
         ) { [weak self] _ in
-            Task {
+            Task { @MainActor in
                 guard let self, !self.deviceManager.isRecordingActive else { return }
                 self.warmUpForCurrentDevice(reason: "microphone-permission-changed")
             }
@@ -87,7 +91,7 @@ final class Recorder: NSObject, ObservableObject {
             object: nil,
             queue: .main
         ) { [weak self] _ in
-            Task {
+            Task { @MainActor in
                 guard let self, !self.deviceManager.isRecordingActive else { return }
                 self.warmUpForCurrentDevice(reason: "app-activated")
             }
@@ -131,13 +135,14 @@ final class Recorder: NSObject, ObservableObject {
     }
 
     struct HardwareStopper: @unchecked Sendable {
-        private let requestStop: @Sendable () -> Void
+        private let requestStop: @Sendable () -> RecordingHardwareStopHandle
 
-        init(requestStop: @escaping @Sendable () -> Void) {
+        init(requestStop: @escaping @Sendable () -> RecordingHardwareStopHandle) {
             self.requestStop = requestStop
         }
 
-        func requestStopRecording() {
+        @discardableResult
+        func requestStopRecording() -> RecordingHardwareStopHandle {
             requestStop()
         }
     }
@@ -148,7 +153,10 @@ final class Recorder: NSObject, ObservableObject {
         }
     }
 
-    func beginStartRecording(toOutputFile url: URL) -> RecordingHardwareStartHandle {
+    func beginStartRecording(
+        toOutputFile url: URL,
+        continuity: RecordingAudioContinuity
+    ) -> RecordingHardwareStartHandle {
         #if DEBUG
         let startTime = ProcessInfo.processInfo.systemUptime
 
@@ -158,17 +166,22 @@ final class Recorder: NSObject, ObservableObject {
         #endif
 
         audioTaskCoordinator.cancelRestoration()
+        activeRecordingContinuity = continuity
         #if DEBUG
         logger.debug("Recording start preflight completed elapsed=\(elapsed(), format: .fixed(precision: 3), privacy: .public)s")
         #endif
 
-        return hardwareController.beginStartRecording(toOutputFile: url)
+        return hardwareController.beginStartRecording(
+            toOutputFile: url,
+            continuity: continuity
+        )
     }
 
     func makeHardwareStopper() -> HardwareStopper {
         let hardwareController = hardwareController
+        let generationID = activeRecordingContinuity?.sessionID
         return HardwareStopper {
-            hardwareController.requestStopRecording()
+            hardwareController.requestStopRecording(generationID: generationID)
         }
     }
 
@@ -198,23 +211,46 @@ final class Recorder: NSObject, ObservableObject {
         let startTime: TimeInterval? = nil
         #endif
 
-        let handle = beginStartRecording(toOutputFile: url)
+        let continuity = RecordingAudioContinuity(expectsStreaming: false)
+        let handle = beginStartRecording(
+            toOutputFile: url,
+            continuity: continuity
+        )
         do {
             let result = try await handle.value()
             finishStartRecording(result, startTime: startTime)
         } catch {
             handle.cancel()
             logger.error("Failed to start recording file=\(url.lastPathComponent, privacy: .public) error=\(error, privacy: .public)")
-            await stopRecording()
+            await stopRecording(for: continuity)
             throw RecorderError.couldNotStartRecording
         }
     }
 
-    func stopRecording() async {
+    func stopRecording(for expectedContinuity: RecordingAudioContinuity? = nil) async {
+        if let expectedContinuity,
+           activeRecordingContinuity !== expectedContinuity {
+            return
+        }
+        let stoppingContinuity = expectedContinuity ?? activeRecordingContinuity
         audioTaskCoordinator.cancelStartTasks()
 
-        await hardwareController.stopRecording()
+        await hardwareController.stopRecordingHardware(
+            generationID: stoppingContinuity?.sessionID
+        )
+
+        if let stoppingContinuity {
+            guard activeRecordingContinuity === stoppingContinuity else {
+                return
+            }
+        } else {
+            guard activeRecordingContinuity == nil else {
+                return
+            }
+        }
+        activeRecordingContinuity = nil
         onAudioChunk = nil
+        hardwareController.finishStopRecording()
 
         audioTaskCoordinator.restoreAudio(
             unmute: { [mediaController] in
@@ -273,4 +309,40 @@ struct AudioMeter: Equatable {
     /// Average and peak input power in dBFS as reported by Core Audio.
     let averagePower: Double
     let peakPower: Double
+}
+
+enum AudioMeterCadence {
+    static let framesPerSecond: Double = 60
+    static let interval: TimeInterval = 1.0 / framesPerSecond
+    static let intervalNanoseconds = Int(interval * 1_000_000_000)
+}
+
+/// A single-slot producer/consumer handoff for metering.
+///
+/// Core Audio's metering queue is the sole producer and the display timeline is
+/// the consumer. Overwriting an unread sample is intentional: rendering an old
+/// backlog would add latency without preserving any useful information.
+final class AudioMeterSource: @unchecked Sendable {
+    static let silence = AudioMeter(averagePower: -160, peakPower: -160)
+
+    private let lock = NSLock()
+    private var latestMeter: AudioMeter
+    private var sampleSequence: UInt64 = 0
+
+    init(initialValue: AudioMeter = AudioMeterSource.silence) {
+        latestMeter = initialValue
+    }
+
+    func store(_ meter: AudioMeter) {
+        lock.lock()
+        latestMeter = meter
+        sampleSequence &+= 1
+        lock.unlock()
+    }
+
+    func snapshot() -> (meter: AudioMeter, sequence: UInt64) {
+        lock.lock()
+        defer { lock.unlock() }
+        return (latestMeter, sampleSequence)
+    }
 }

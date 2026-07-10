@@ -1,6 +1,6 @@
 import Foundation
 
-class OpenAICompatibleTranscriptionService {
+struct OpenAICompatibleTranscriptionService: Sendable {
     func transcribe(audioURL: URL, model: CustomCloudModel, context: TranscriptionRequestContext) async throws -> String {
         guard let url = URL(string: model.apiEndpoint) else {
             throw NSError(domain: "CustomWhisperTranscriptionService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid API endpoint URL"])

@@ -1,7 +1,7 @@
 import Foundation
 
-final class PromptDetectionService {
-    struct Detection {
+final class PromptDetectionService: Sendable {
+    struct Detection: Sendable {
         let prompt: CustomPrompt
         let processedText: String
     }
@@ -16,7 +16,7 @@ final class PromptDetectionService {
         return nil
     }
 
-    private struct TriggerCandidate {
+    private struct TriggerCandidate: Sendable {
         let prompt: CustomPrompt
         let triggerWord: String
         let promptIndex: Int

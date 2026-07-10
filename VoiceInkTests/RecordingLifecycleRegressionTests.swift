@@ -269,7 +269,7 @@ struct RecordingLifecycleRegressionTests {
     @Test func streamingServiceDrainsBufferedAudioBeforeCommit() async throws {
         let provider = FakeStreamingProvider(commitEvent: .committed(text: "final text"))
         let service = try StreamingTranscriptionService(
-            modelContext: makeModelContext(),
+            modelContainer: makeModelContainer(),
             providerFactory: { _, _, _ in provider },
             finalCommitTimeoutNanoseconds: 200_000_000
         )
@@ -300,7 +300,7 @@ struct RecordingLifecycleRegressionTests {
             disconnectDelayNanoseconds: 200_000_000
         )
         let service = try StreamingTranscriptionService(
-            modelContext: makeModelContext(),
+            modelContainer: makeModelContainer(),
             providerFactory: { _, _, _ in provider },
             finalCommitTimeoutNanoseconds: 200_000_000,
             disconnectTimeoutNanoseconds: 20_000_000
@@ -325,7 +325,7 @@ struct RecordingLifecycleRegressionTests {
     @Test func streamingServiceSendsAudioBufferedBeforeConnection() async throws {
         let provider = FakeStreamingProvider(commitEvent: .committed(text: "final text"))
         let service = try StreamingTranscriptionService(
-            modelContext: makeModelContext(),
+            modelContainer: makeModelContainer(),
             providerFactory: { _, _, _ in provider },
             finalCommitTimeoutNanoseconds: 200_000_000
         )
@@ -347,12 +347,13 @@ struct RecordingLifecycleRegressionTests {
 
     @MainActor
     @Test func streamingSessionFallsBackWhenBufferedAudioDropsBeforeConnection() async throws {
+        let connectGate = FakeStreamingConnectGate()
         let provider = FakeStreamingProvider(
             commitEvent: .committed(text: "streaming transcript"),
-            connectDelayNanoseconds: 20_000_000
+            connectGate: connectGate
         )
         let streamingService = try StreamingTranscriptionService(
-            modelContext: makeModelContext(),
+            modelContainer: makeModelContainer(),
             providerFactory: { _, _, _ in provider },
             maxBufferedChunks: 1,
             finalCommitTimeoutNanoseconds: 200_000_000
@@ -375,11 +376,19 @@ struct RecordingLifecycleRegressionTests {
         let callback = try #require(preparedCallback)
         callback(Data([0x01]))
         callback(Data([0x02]))
+        connectGate.release()
 
         let text = try await session.transcribe(audioURL: URL(fileURLWithPath: "/tmp/voiceink-test.wav"))
+        let disconnectDeadline = ProcessInfo.processInfo.systemUptime + 1
+        while provider.disconnectCallCount == 0,
+              ProcessInfo.processInfo.systemUptime < disconnectDeadline {
+            try? await Task.sleep(nanoseconds: 1_000_000)
+        }
 
         #expect(text == "batch transcript")
-        #expect(provider.sentChunks == [Data([0x02])])
+        // Once continuity is lost, the bounded queue seals immediately. Sending
+        // only the newest fragment would create a known-incomplete stream.
+        #expect(provider.sentChunks.isEmpty)
         #expect(provider.commitCallCount == 0)
         #expect(provider.disconnectCallCount == 1)
         #expect(fallbackService.transcribeCallCount == 1)
@@ -387,9 +396,12 @@ struct RecordingLifecycleRegressionTests {
 
     @MainActor
     @Test func streamingServiceTimesOutWhenFinalCommitNeverArrives() async throws {
-        let provider = FakeStreamingProvider(commitEvent: nil)
+        let provider = FakeStreamingProvider(
+            commitEvent: nil,
+            emitsFinalizedOnCommit: false
+        )
         let service = try StreamingTranscriptionService(
-            modelContext: makeModelContext(),
+            modelContainer: makeModelContainer(),
             providerFactory: { _, _, _ in provider },
             finalCommitTimeoutNanoseconds: 20_000_000
         )
@@ -404,7 +416,7 @@ struct RecordingLifecycleRegressionTests {
             Issue.record("Expected stopAndGetFinalText to time out when no final commit event arrives")
         } catch StreamingTranscriptionError.timeout {
             #expect(provider.commitCallCount == 1)
-            #expect(provider.disconnectCallCount == 1)
+            #expect(await eventually { provider.disconnectCallCount == 1 })
         } catch {
             Issue.record("Expected StreamingTranscriptionError.timeout, got \(error)")
         }
@@ -412,9 +424,12 @@ struct RecordingLifecycleRegressionTests {
 
     @MainActor
     @Test func streamingServiceTimesOutWhenFinalCommitAckNeverArrivesAfterPriorCommit() async throws {
-        let provider = FakeStreamingProvider(commitEvent: nil)
+        let provider = FakeStreamingProvider(
+            commitEvent: nil,
+            emitsFinalizedOnCommit: false
+        )
         let service = try StreamingTranscriptionService(
-            modelContext: makeModelContext(),
+            modelContainer: makeModelContainer(),
             providerFactory: { _, _, _ in provider },
             finalCommitTimeoutNanoseconds: 20_000_000
         )
@@ -480,7 +495,7 @@ struct RecordingLifecycleRegressionTests {
             connectError: StreamingTranscriptionError.connectionFailed("connect failed")
         )
         let streamingService = try StreamingTranscriptionService(
-            modelContext: makeModelContext(),
+            modelContainer: makeModelContainer(),
             providerFactory: { _, _, _ in provider },
             finalCommitTimeoutNanoseconds: 200_000_000
         )
@@ -547,7 +562,7 @@ struct RecordingLifecycleRegressionTests {
             sendError: StreamingTranscriptionError.connectionFailed("dead socket")
         )
         let service = try StreamingTranscriptionService(
-            modelContext: makeModelContext(),
+            modelContainer: makeModelContainer(),
             providerFactory: { _, _, _ in provider },
             finalCommitTimeoutNanoseconds: 200_000_000
         )
@@ -579,7 +594,7 @@ struct RecordingLifecycleRegressionTests {
             ]
         )
         let service = try StreamingTranscriptionService(
-            modelContext: makeModelContext(),
+            modelContainer: makeModelContainer(),
             providerFactory: { _, _, _ in provider },
             finalCommitTimeoutNanoseconds: 200_000_000
         )
@@ -596,6 +611,11 @@ struct RecordingLifecycleRegressionTests {
             Issue.record("Expected provider error after commit event to fail the streaming session")
         } catch StreamingTranscriptionError.serverError(let message) {
             #expect(message == "commit failed")
+            let deadline = ProcessInfo.processInfo.systemUptime + 1
+            while provider.disconnectCallCount == 0,
+                  ProcessInfo.processInfo.systemUptime < deadline {
+                try? await Task.sleep(nanoseconds: 1_000_000)
+            }
             #expect(provider.disconnectCallCount == 1)
         } catch {
             Issue.record("Expected StreamingTranscriptionError.serverError, got \(error)")
@@ -607,7 +627,7 @@ struct RecordingLifecycleRegressionTests {
         let provider = FakeStreamingProvider(commitEvent: .committed(text: "hello world"))
         var partials: [String] = []
         let service = try StreamingTranscriptionService(
-            modelContext: makeModelContext(),
+            modelContainer: makeModelContainer(),
             onPartialTranscript: { partial in
                 partials.append(partial)
             },
@@ -674,6 +694,40 @@ struct RecordingLifecycleRegressionTests {
         #expect(streamingService.cancelCallCount == 0)
         #expect(fallbackService.transcribeCallCount == 0)
         #expect(fallbackService.modelNames.isEmpty)
+    }
+
+    @MainActor
+    @Test func streamingSessionCancellationNeverUploadsBatchFallback() async throws {
+        let streamingService = FakeStreamingService(
+            stopResult: .failure(CancellationError())
+        )
+        let fallbackService = FakeBatchTranscriptionService(result: "must not upload")
+        let session = StreamingTranscriptionSession(
+            streamingService: streamingService,
+            fallbackService: fallbackService
+        )
+        _ = try await session.prepare(
+            configuration: TranscriptionRuntimeConfiguration(
+                mode: nil,
+                model: makeCloudModel(name: "deepgram-live", provider: .deepgram),
+                language: "en",
+                isRealtimeEnabled: true
+            )
+        )
+
+        session.cancel()
+
+        do {
+            _ = try await session.transcribe(
+                audioURL: URL(fileURLWithPath: "/tmp/voiceink-cancelled.wav")
+            )
+            Issue.record("Expected cancellation to remain terminal")
+        } catch is CancellationError {
+        } catch {
+            Issue.record("Expected CancellationError, got \(error)")
+        }
+
+        #expect(fallbackService.transcribeCallCount == 0)
     }
 
     @MainActor
@@ -1174,36 +1228,33 @@ struct RecordingLifecycleRegressionTests {
         #expect(state.noiseFloorDb == calibratedNoiseFloor)
     }
 
-    @Test func audioVisualizerMeterRecognizesQuietLowCrestSpeechAfterGateCoalescedNoiseCalibration() {
-        var gate = RecordingAudioMeterPublishGate(minimumDbDelta: 0.75, maximumInterval: 0.20)
+    @Test func audioVisualizerMeterRecognizesQuietLowCrestSpeechAtDisplayCadence() {
         var state = AudioVisualizerMeterState()
         var snapshots: [AudioVisualizerMeterSnapshot] = []
 
         func feed(averageDb: Double, peakDb: Double, at time: TimeInterval) {
-            let meter = AudioMeter(averagePower: averageDb, peakPower: peakDb)
-            guard gate.shouldPublish(meter, at: time) else { return }
             snapshots.append(state.update(averageDb: averageDb, peakDb: peakDb, at: time))
         }
 
-        for tick in 0...30 {
+        for tick in 0...60 {
             feed(
                 averageDb: -70,
                 peakDb: -67,
-                at: Double(tick) * AudioVisualizerBarModel.animationInterval
+                at: Double(tick) * AudioMeterCadence.interval
             )
         }
         let quietSnapshotCount = snapshots.count
         let calibratedNoiseFloor = state.noiseFloorDb
 
-        for tick in 31...45 {
+        for tick in 61...90 {
             feed(
                 averageDb: -62,
                 peakDb: -59,
-                at: Double(tick) * AudioVisualizerBarModel.animationInterval
+                at: Double(tick) * AudioMeterCadence.interval
             )
         }
 
-        #expect(quietSnapshotCount < 10)
+        #expect(quietSnapshotCount == 61)
         #expect(snapshots.prefix(quietSnapshotCount).allSatisfy { !$0.isSpeechActive })
         #expect(calibratedNoiseFloor < -66)
         #expect(snapshots.suffix(from: quietSnapshotCount).contains { $0.isSpeechActive })
@@ -1277,27 +1328,24 @@ struct RecordingLifecycleRegressionTests {
         #expect(silentTail.last?.level == 0)
     }
 
-    @Test func audioVisualizerMeterReleaseUsesElapsedTimeWithCoalescedMeterUpdates() {
-        var gate = RecordingAudioMeterPublishGate(minimumDbDelta: 0.75, maximumInterval: 0.20)
+    @Test func audioVisualizerMeterReleaseUsesDisplayElapsedTime() {
         var state = AudioVisualizerMeterState()
         var snapshots: [AudioVisualizerMeterSnapshot] = []
 
         func feed(averageDb: Double, peakDb: Double, at time: TimeInterval) {
-            let meter = AudioMeter(averagePower: averageDb, peakPower: peakDb)
-            guard gate.shouldPublish(meter, at: time) else { return }
             snapshots.append(state.update(averageDb: averageDb, peakDb: peakDb, at: time))
         }
 
         feed(averageDb: -30, peakDb: -18, at: 0)
-        for tick in 1...6 {
-            feed(averageDb: -30, peakDb: -18, at: Double(tick) * AudioVisualizerBarModel.animationInterval)
+        for tick in 1...12 {
+            feed(averageDb: -30, peakDb: -18, at: Double(tick) * AudioMeterCadence.interval)
         }
         feed(averageDb: -30, peakDb: -18, at: 0.231)
         let activeLevel = snapshots.last?.level ?? 0
 
         feed(averageDb: -70, peakDb: -67, at: 0.264)
-        for tick in 9...40 {
-            feed(averageDb: -70, peakDb: -67, at: Double(tick) * AudioVisualizerBarModel.animationInterval)
+        for tick in 17...80 {
+            feed(averageDb: -70, peakDb: -67, at: Double(tick) * AudioMeterCadence.interval)
         }
 
         #expect(activeLevel > 0.3)
@@ -1317,32 +1365,29 @@ struct RecordingLifecycleRegressionTests {
         #expect(impulse.level < 0.15)
     }
 
-    @Test func voiceInkEngineStartsRealtimePreconnectAfterAudioCaptureAndRecordingState() throws {
+    @Test func voiceInkEngineOverlapsRealtimePreconnectWithHardwareStartup() throws {
         let source = try readProjectSource("VoiceInk/Transcription/Engine/VoiceInkEngine.swift")
-        let captureStarted = try #require(
-            source.range(of: "Recording startup audio capture started")
-        )
-        let recordingStateSet = try #require(
-            source.range(of: "self.recordingState = .recording")
+        let hardwareStartIssued = try #require(
+            source.range(of: "self.recorder.beginStartRecording")
         )
         let preconnectStarted = try #require(
             source.range(of: "initialRealtimePreconnect = self.beginInitialRealtimePreconnect")
         )
+        let hardwareStartAwaited = try #require(
+            source.range(of: "try await hardwareStart.value()")
+        )
 
-        #expect(captureStarted.lowerBound < recordingStateSet.lowerBound)
-        #expect(recordingStateSet.lowerBound < preconnectStarted.lowerBound)
+        #expect(hardwareStartIssued.lowerBound < preconnectStarted.lowerBound)
+        #expect(preconnectStarted.lowerBound < hardwareStartAwaited.lowerBound)
     }
 
-    @Test func audioVisualizerUsesOnlyThrottledLocalTimelineRendering() throws {
+    @Test func audioVisualizerUsesOneDisplayClockAndLatestValueSource() throws {
         let source = try readProjectSource("VoiceInk/Views/Recorder/AudioVisualizerView.swift")
 
-        #expect(source.contains("if visualMeter.motionAmount > 0.01"))
-        #expect(source.contains("TimelineView(.animation(minimumInterval: AudioVisualizerBarModel.animationInterval))"))
-        #expect(source.contains("static let animationInterval: TimeInterval = 1.0 / 30.0"))
-        #expect(source.contains("if nextVisualMeter != visualMeter"))
+        #expect(source.contains("TimelineView(.animation(minimumInterval: AudioMeterCadence.interval))"))
+        #expect(source.contains("source.snapshot()"))
         #expect(source.contains("AudioVisualizerMeterStore"))
-        #expect(!source.contains("let noiseFloorDb: Double"))
-        #expect(!source.contains("minimumInterval: 0.016"))
+        #expect(!source.contains(".animation(.easeOut"))
     }
 
     @Test func recorderViewsObserveAudioMeterOnlyInsideStatusDisplay() throws {
@@ -1352,47 +1397,42 @@ struct RecordingLifecycleRegressionTests {
 
         #expect(!notchSource.contains("@ObservedObject var recorder: Recorder"))
         #expect(!miniSource.contains("@ObservedObject var recorder: Recorder"))
-        #expect(componentsSource.contains("@ObservedObject var recorder: Recorder"))
-        #expect(!notchSource.contains("audioMeter: recorder.audioMeter"))
-        #expect(!miniSource.contains("audioMeter: recorder.audioMeter"))
+        #expect(!componentsSource.contains("@ObservedObject var recorder: Recorder"))
+        #expect(componentsSource.contains("let audioMeterSource: AudioMeterSource"))
+        #expect(notchSource.contains("let audioMeterSource: AudioMeterSource"))
+        #expect(miniSource.contains("let audioMeterSource: AudioMeterSource"))
     }
 
     @Test func recorderStatusDisplayKeepsOneVisualizerIdentityAcrossStartingAndRecording() throws {
         let componentsSource = try readProjectSource("VoiceInk/Views/Recorder/RecorderComponents.swift")
         let visualizerBranchCount = componentsSource
-            .components(separatedBy: "AudioVisualizer(audioMeter: recorder.audioMeter")
+            .components(separatedBy: "AudioVisualizer(audioMeterSource: audioMeterSource")
             .count - 1
 
         #expect(componentsSource.contains("if currentState == .starting || currentState == .recording"))
         #expect(visualizerBranchCount == 1)
     }
 
-    @Test func audioMeterPublishGateCoalescesStableSilenceButPublishesChanges() {
-        var gate = RecordingAudioMeterPublishGate(minimumDbDelta: 0.75, maximumInterval: 0.20)
-        let stableSilence = AudioMeter(averagePower: -45, peakPower: -42)
+}
 
-        let firstPublish = gate.shouldPublish(stableSilence, at: 0)
-        #expect(firstPublish)
-
-        for tick in 1...5 {
-            let shouldPublishStableTick = gate.shouldPublish(stableSilence, at: Double(tick) * 0.033)
-            #expect(!shouldPublishStableTick)
-        }
-
-        let intervalPublish = gate.shouldPublish(stableSilence, at: 0.231)
-        let changedMeterPublish = gate.shouldPublish(AudioMeter(averagePower: -43.9, peakPower: -40.9), at: 0.264)
-
-        #expect(intervalPublish)
-        #expect(changedMeterPublish)
+private func eventually(
+    timeout: TimeInterval = 0.5,
+    condition: @escaping @Sendable () -> Bool
+) async -> Bool {
+    let deadline = ProcessInfo.processInfo.systemUptime + timeout
+    while ProcessInfo.processInfo.systemUptime < deadline {
+        if condition() { return true }
+        try? await Task.sleep(nanoseconds: 1_000_000)
     }
+    return condition()
 }
 
 @MainActor
-private func makeModelContext() throws -> ModelContext {
+private func makeModelContainer() throws -> ModelContainer {
     let schema = Schema([Transcription.self])
     let configuration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)
     let container = try ModelContainer(for: schema, configurations: [configuration])
-    return container.mainContext
+    return container
 }
 
 private func makeCloudModel(name: String, provider: ModelProvider) -> CloudModel {
@@ -1439,9 +1479,9 @@ private func readProjectSource(_ relativePath: String) throws -> String {
 private final class FakeTranscriptionSession: TranscriptionSession {
     private(set) var cancelCallCount = 0
     var reusable = true
-    var prepareCallback: ((Data) -> Void)? = { _ in }
+    var prepareCallback: RecordingAudioChunkHandler? = { _ in }
 
-    func prepare(configuration: TranscriptionRuntimeConfiguration) async throws -> ((Data) -> Void)? {
+    func prepare(configuration: TranscriptionRuntimeConfiguration) async throws -> RecordingAudioChunkHandler? {
         prepareCallback
     }
 
@@ -1468,7 +1508,9 @@ private final class FakeStreamingProvider: StreamingTranscriptionProvider, @unch
     private let sendError: Error?
     private let connectError: Error?
     private let connectDelayNanoseconds: UInt64
+    private let connectGate: FakeStreamingConnectGate?
     private let disconnectDelayNanoseconds: UInt64
+    private let emitsFinalizedOnCommit: Bool
     private let eventContinuation: AsyncStream<StreamingTranscriptionEvent>.Continuation
     let transcriptionEvents: AsyncStream<StreamingTranscriptionEvent>
 
@@ -1477,13 +1519,17 @@ private final class FakeStreamingProvider: StreamingTranscriptionProvider, @unch
         sendError: Error? = nil,
         connectError: Error? = nil,
         connectDelayNanoseconds: UInt64 = 0,
-        disconnectDelayNanoseconds: UInt64 = 0
+        connectGate: FakeStreamingConnectGate? = nil,
+        disconnectDelayNanoseconds: UInt64 = 0,
+        emitsFinalizedOnCommit: Bool = true
     ) {
         self.commitEvents = commitEvent.map { [$0] } ?? []
         self.sendError = sendError
         self.connectError = connectError
         self.connectDelayNanoseconds = connectDelayNanoseconds
+        self.connectGate = connectGate
         self.disconnectDelayNanoseconds = disconnectDelayNanoseconds
+        self.emitsFinalizedOnCommit = emitsFinalizedOnCommit
         let (stream, continuation) = AsyncStream.makeStream(of: StreamingTranscriptionEvent.self)
         self.transcriptionEvents = stream
         self.eventContinuation = continuation
@@ -1494,13 +1540,17 @@ private final class FakeStreamingProvider: StreamingTranscriptionProvider, @unch
         sendError: Error? = nil,
         connectError: Error? = nil,
         connectDelayNanoseconds: UInt64 = 0,
-        disconnectDelayNanoseconds: UInt64 = 0
+        connectGate: FakeStreamingConnectGate? = nil,
+        disconnectDelayNanoseconds: UInt64 = 0,
+        emitsFinalizedOnCommit: Bool = true
     ) {
         self.commitEvents = commitEvents
         self.sendError = sendError
         self.connectError = connectError
         self.connectDelayNanoseconds = connectDelayNanoseconds
+        self.connectGate = connectGate
         self.disconnectDelayNanoseconds = disconnectDelayNanoseconds
+        self.emitsFinalizedOnCommit = emitsFinalizedOnCommit
         let (stream, continuation) = AsyncStream.makeStream(of: StreamingTranscriptionEvent.self)
         self.transcriptionEvents = stream
         self.eventContinuation = continuation
@@ -1523,6 +1573,9 @@ private final class FakeStreamingProvider: StreamingTranscriptionProvider, @unch
     }
 
     func connect(model: any TranscriptionModel, language: String?) async throws {
+        if let connectGate {
+            await connectGate.wait()
+        }
         if connectDelayNanoseconds > 0 {
             try await Task.sleep(nanoseconds: connectDelayNanoseconds)
         }
@@ -1547,6 +1600,9 @@ private final class FakeStreamingProvider: StreamingTranscriptionProvider, @unch
         for commitEvent in commitEvents {
             eventContinuation.yield(commitEvent)
         }
+        if emitsFinalizedOnCommit {
+            eventContinuation.yield(.finalized)
+        }
     }
 
     func emit(_ event: StreamingTranscriptionEvent) {
@@ -1565,6 +1621,35 @@ private final class FakeStreamingProvider: StreamingTranscriptionProvider, @unch
         lock.lock()
         defer { lock.unlock() }
         return body()
+    }
+}
+
+private final class FakeStreamingConnectGate: @unchecked Sendable {
+    private let lock = NSLock()
+    private var isReleased = false
+    private var waiter: CheckedContinuation<Void, Never>?
+
+    func wait() async {
+        await withCheckedContinuation { continuation in
+            lock.lock()
+            if isReleased {
+                lock.unlock()
+                continuation.resume()
+            } else {
+                precondition(waiter == nil)
+                waiter = continuation
+                lock.unlock()
+            }
+        }
+    }
+
+    func release() {
+        lock.lock()
+        isReleased = true
+        let waiter = waiter
+        self.waiter = nil
+        lock.unlock()
+        waiter?.resume()
     }
 }
 

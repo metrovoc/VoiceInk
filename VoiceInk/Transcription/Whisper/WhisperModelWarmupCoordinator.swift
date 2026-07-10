@@ -25,14 +25,10 @@ final class WhisperModelWarmupCoordinator: ObservableObject {
             do {
                 try await runWarmup(for: model, whisperModelManager: whisperModelManager)
             } catch {
-                await MainActor.run {
-                    whisperModelManager.logger.error("❌ Warmup failed for \(model.name, privacy: .public): \(error, privacy: .public)")
-                }
+                whisperModelManager.logger.error("❌ Warmup failed for \(model.name, privacy: .public): \(error, privacy: .public)")
             }
 
-            await MainActor.run {
-                self.warmingModels.remove(model.name)
-            }
+            self.warmingModels.remove(model.name)
         }
     }
 

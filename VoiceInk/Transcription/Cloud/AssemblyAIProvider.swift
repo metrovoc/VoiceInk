@@ -5,6 +5,7 @@ import LLMkit
 struct AssemblyAIProvider: CloudProvider {
     let modelProvider: ModelProvider = .assemblyAI
     let providerKey: String = "AssemblyAI"
+    let usesStreamingVocabulary = true
     let languageCodes: [String]? = ["en", "es", "de", "fr", "pt", "it"]
     let includesAutoDetect: Bool = true
 
@@ -45,8 +46,8 @@ struct AssemblyAIProvider: CloudProvider {
         )
     }
 
-    func makeStreamingProvider(modelContext: ModelContext) -> (any StreamingTranscriptionProvider)? {
-        AssemblyAIStreamingProvider(modelContext: modelContext)
+    func makeStreamingProvider(customVocabulary: [String]) -> (any StreamingTranscriptionProvider)? {
+        AssemblyAIStreamingProvider(customVocabulary: customVocabulary)
     }
 
     func verifyAPIKey(_ key: String) async -> (isValid: Bool, errorMessage: String?) {

@@ -14,7 +14,9 @@ class TranscriptionServiceRegistry {
         modelsDirectory: modelsDirectory,
         modelProvider: modelProvider
     )
-    private(set) lazy var cloudTranscriptionService = CloudTranscriptionService(modelContext: modelContext)
+    private(set) lazy var cloudTranscriptionService = CloudTranscriptionService(
+        modelContainer: modelContext.container
+    )
     private(set) lazy var nativeAppleTranscriptionService = NativeAppleTranscriptionService()
     private(set) lazy var fluidAudioTranscriptionService = FluidAudioTranscriptionService()
 
@@ -44,14 +46,19 @@ class TranscriptionServiceRegistry {
     }
 
     /// Creates a streaming or file-based session for the resolved transcription configuration.
-    func createSession(for configuration: TranscriptionRuntimeConfiguration, onPartialTranscript: (@MainActor (String) -> Void)? = nil) -> TranscriptionSession {
+    func createSession(
+        for configuration: TranscriptionRuntimeConfiguration,
+        onPartialTranscript: (@MainActor @Sendable (String) -> Void)? = nil,
+        onTranscriptSnapshot: (@MainActor @Sendable (StreamingTranscriptSnapshot) -> Void)? = nil
+    ) -> TranscriptionSession {
         let model = configuration.model
 
         if shouldUseRealtimeTranscription(for: configuration) {
             let streamingService = StreamingTranscriptionService(
-                modelContext: modelContext,
+                modelContainer: modelContext.container,
                 fluidAudioService: model.provider == .fluidAudio ? fluidAudioTranscriptionService : nil,
-                onPartialTranscript: onPartialTranscript
+                onPartialTranscript: onPartialTranscript,
+                onTranscriptSnapshot: onTranscriptSnapshot
             )
             let fallback = service(for: model.provider)
             return StreamingTranscriptionSession(streamingService: streamingService, fallbackService: fallback)

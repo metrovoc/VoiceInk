@@ -2,7 +2,54 @@ import Foundation
 import FluidAudio
 import os.log
 
-class FluidAudioTranscriptionService: TranscriptionService {
+/// Serializes complete operations that mutate or consume the shared FluidAudio
+/// managers. Actor isolation alone is insufficient because an actor can reenter
+/// while `loadModels`, VAD, or transcription is suspended. Waiting callers are
+/// FIFO and a cancelled caller checks cancellation before touching a manager.
+actor FluidAudioExclusiveOperationGate {
+    private var isHeld = false
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+    private var waiterHead = 0
+
+    func run<Value: Sendable>(
+        _ operation: @escaping @Sendable () async throws -> Value
+    ) async rethrows -> Value {
+        await acquire()
+        defer { release() }
+        return try await operation()
+    }
+
+    private func acquire() async {
+        guard isHeld else {
+            isHeld = true
+            return
+        }
+
+        await withCheckedContinuation { continuation in
+            waiters.append(continuation)
+        }
+    }
+
+    private func release() {
+        guard waiterHead < waiters.count else {
+            waiters.removeAll(keepingCapacity: true)
+            waiterHead = 0
+            isHeld = false
+            return
+        }
+
+        let waiter = waiters[waiterHead]
+        waiterHead += 1
+        if waiterHead == waiters.count {
+            waiters.removeAll(keepingCapacity: true)
+            waiterHead = 0
+        }
+        // Ownership transfers directly; isHeld deliberately remains true.
+        waiter.resume()
+    }
+}
+
+actor FluidAudioTranscriptionService: TranscriptionService {
     private var asrManager: AsrManager?
     private var unifiedAsrManager: UnifiedAsrManager?
     private var nemotronAsrManager: StreamingNemotronMultilingualAsrManager?
@@ -11,13 +58,14 @@ class FluidAudioTranscriptionService: TranscriptionService {
     private var activeNemotronModelName: String?
     private var cachedModels: AsrModels?
     private var loadingTask: (version: AsrModelVersion, task: Task<AsrModels, Error>)?
+    private let operationGate = FluidAudioExclusiveOperationGate()
     private let logger = Logger(subsystem: "com.metrovoc.voiceink.fluidaudio", category: "FluidAudioTranscriptionService")
 
     private func version(for model: any TranscriptionModel) -> AsrModelVersion {
         FluidAudioModelManager.asrVersion(for: model.name)
     }
 
-    static func languageHint(from selectedLanguage: String?, model: any TranscriptionModel) -> Language? {
+    nonisolated static func languageHint(from selectedLanguage: String?, model: any TranscriptionModel) -> Language? {
         guard model.provider == .fluidAudio else {
             return nil
         }
@@ -114,7 +162,17 @@ class FluidAudioTranscriptionService: TranscriptionService {
         }
     }
 
-    func loadModel(for model: FluidAudioModel) async throws {
+    func loadModel(for model: any TranscriptionModel) async throws {
+        try await operationGate.run { [self] in
+            try Task.checkCancellation()
+            try await loadModelExclusively(for: model)
+        }
+    }
+
+    private func loadModelExclusively(for model: any TranscriptionModel) async throws {
+        guard model.provider == .fluidAudio else {
+            throw ASRError.notInitialized
+        }
         if FluidAudioModelManager.isNemotronModel(named: model.name) {
             // Realtime Nemotron uses a dedicated streaming manager; batch loads lazily in transcribe().
             return
@@ -129,6 +187,21 @@ class FluidAudioTranscriptionService: TranscriptionService {
     }
 
     func transcribe(audioURL: URL, model: any TranscriptionModel, context: TranscriptionRequestContext) async throws -> String {
+        try await operationGate.run { [self] in
+            try Task.checkCancellation()
+            return try await transcribeExclusively(
+                audioURL: audioURL,
+                model: model,
+                context: context
+            )
+        }
+    }
+
+    private func transcribeExclusively(
+        audioURL: URL,
+        model: any TranscriptionModel,
+        context: TranscriptionRequestContext
+    ) async throws -> String {
         if FluidAudioModelManager.isParakeetUnifiedModel(named: model.name) {
             try await ensureUnifiedModelsLoaded()
             guard let unifiedAsrManager else {
@@ -251,7 +324,9 @@ class FluidAudioTranscriptionService: TranscriptionService {
 
     // Releases ASR/VAD resources but preserves cached models for reuse
     func cleanup() async {
-        await cleanupLoadedManagers()
+        await operationGate.run { [self] in
+            await cleanupLoadedManagers()
+        }
     }
 
 }
