@@ -290,7 +290,7 @@ struct RecordingLifecycleRegressionTests {
         #expect(provider.sentChunks == chunks)
         #expect(provider.sentChunkCountAtCommit == chunks.count)
         #expect(provider.commitCallCount == 1)
-        #expect(provider.disconnectCallCount == 1)
+        #expect(await eventually { provider.disconnectCallCount == 1 })
     }
 
     @MainActor
@@ -318,7 +318,7 @@ struct RecordingLifecycleRegressionTests {
         #expect(text == "final text")
         #expect(elapsed < 0.15)
         #expect(provider.commitCallCount == 1)
-        #expect(provider.disconnectCallCount == 1)
+        #expect(await eventually { provider.disconnectCallCount == 1 })
     }
 
     @MainActor
@@ -446,7 +446,7 @@ struct RecordingLifecycleRegressionTests {
             Issue.record("Expected final commit ack timeout even when older committed text exists")
         } catch StreamingTranscriptionError.timeout {
             #expect(provider.commitCallCount == 1)
-            #expect(provider.disconnectCallCount == 1)
+            #expect(await eventually { provider.disconnectCallCount == 1 })
         } catch {
             Issue.record("Expected StreamingTranscriptionError.timeout, got \(error)")
         }
@@ -521,7 +521,7 @@ struct RecordingLifecycleRegressionTests {
 
         #expect(text == "batch transcript")
         #expect(!session.canReusePreparedSession())
-        #expect(provider.disconnectCallCount == 1)
+        #expect(await eventually { provider.disconnectCallCount == 1 })
         #expect(fallbackService.transcribeCallCount == 1)
     }
 
@@ -580,7 +580,7 @@ struct RecordingLifecycleRegressionTests {
         } catch StreamingTranscriptionError.connectionFailed(let message) {
             #expect(message == "dead socket")
             #expect(provider.commitCallCount == 0)
-            #expect(provider.disconnectCallCount == 1)
+            #expect(await eventually { provider.disconnectCallCount == 1 })
         } catch {
             Issue.record("Expected StreamingTranscriptionError.connectionFailed, got \(error)")
         }

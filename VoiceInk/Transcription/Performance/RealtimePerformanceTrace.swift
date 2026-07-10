@@ -16,6 +16,7 @@ enum RealtimePerformanceMilestone: String, CaseIterable, Sendable {
     case recordingRequested
     case audioCaptureStarted
     case preconnectRequested
+    case providerConnectStarted
     case streamingConnected
     case firstPartialReceived
     case firstPartialPublished
@@ -45,6 +46,10 @@ struct RealtimePerformanceSnapshot: Sendable, Equatable {
 
     var requestToAudioCapture: TimeInterval? {
         interval(from: .recordingRequested, to: .audioCaptureStarted)
+    }
+
+    var requestToProviderConnect: TimeInterval? {
+        interval(from: .recordingRequested, to: .providerConnectStarted)
     }
 
     var stopToCommit: TimeInterval? {
@@ -99,11 +104,12 @@ final class RealtimePerformanceTrace: @unchecked Sendable {
         let snapshot = snapshot()
         let requestToPreconnect = snapshot.requestToPreconnect ?? -1
         let requestToAudioCapture = snapshot.requestToAudioCapture ?? -1
+        let requestToProviderConnect = snapshot.requestToProviderConnect ?? -1
         let stopToCommit = snapshot.stopToCommit ?? -1
         let partialToPublish = snapshot.partialToPublish ?? -1
 
         Self.logger.notice(
-            "Realtime trace session=\(self.sessionID.uuidString, privacy: .public) requestToPreconnect=\(requestToPreconnect, format: .fixed(precision: 3), privacy: .public)s requestToAudioCapture=\(requestToAudioCapture, format: .fixed(precision: 3), privacy: .public)s stopToCommit=\(stopToCommit, format: .fixed(precision: 3), privacy: .public)s partialToPublish=\(partialToPublish, format: .fixed(precision: 3), privacy: .public)s"
+            "Realtime trace session=\(self.sessionID.uuidString, privacy: .public) requestToPreconnect=\(requestToPreconnect, format: .fixed(precision: 3), privacy: .public)s requestToProviderConnect=\(requestToProviderConnect, format: .fixed(precision: 3), privacy: .public)s requestToAudioCapture=\(requestToAudioCapture, format: .fixed(precision: 3), privacy: .public)s stopToCommit=\(stopToCommit, format: .fixed(precision: 3), privacy: .public)s partialToPublish=\(partialToPublish, format: .fixed(precision: 3), privacy: .public)s"
         )
 
         warnIfOverBudget(

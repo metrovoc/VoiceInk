@@ -1,5 +1,5 @@
 {
-  "originHash" : "e805a0083f11b367299be0271a4145f9bf45e8082ce8569f5321bb4caa759816",
+  "originHash" : "33e6cda138cafc2cbc0512005e2707acb78baaf346ab1cce2615776c0c686143",
   "pins" : [
     {
       "identity" : "axswift",
@@ -42,8 +42,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/metrovoc/LLMkit.git",
       "state" : {
-        "revision" : "267af03b4390f13179cd6e340a554cccf57b6403",
-        "version" : "1.80.1"
+        "revision" : "5a094c6a00710a56631becc26ad0bf9c8a6f5534",
+        "version" : "1.80.2"
       }
     },
     {

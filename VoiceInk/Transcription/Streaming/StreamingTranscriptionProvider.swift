@@ -166,7 +166,6 @@ enum StreamingTranscriptionError: LocalizedError {
     case audioConversionFailed
     case emptyTranscript
     case audioDropped(chunks: Int, bytes: Int)
-    case transportOverloaded(maximumQueueAge: TimeInterval)
     case eventBacklogExceeded(limit: Int)
     case transcriptionWindowExceeded(maximumDuration: TimeInterval)
 
@@ -188,11 +187,6 @@ enum StreamingTranscriptionError: LocalizedError {
             return String(localized: "Streaming transcription returned no text")
         case .audioDropped(let chunks, let bytes):
             return String(format: String(localized: "Streaming audio dropped %d chunks (%d bytes)"), chunks, bytes)
-        case .transportOverloaded(let maximumQueueAge):
-            return String(
-                format: String(localized: "Streaming audio queue exceeded the realtime latency budget (%.3f seconds)"),
-                maximumQueueAge
-            )
         case .eventBacklogExceeded(let limit):
             return String(
                 format: String(localized: "Streaming provider event backlog exceeded its %d-event safety limit"),
