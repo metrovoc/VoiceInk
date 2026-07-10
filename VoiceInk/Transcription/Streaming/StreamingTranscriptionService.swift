@@ -391,7 +391,10 @@ final class StreamingTranscriptionService:
 
     deinit {
         connectionTask?.cancel()
-        audioQueue.cancel()
+        audioQueue.cancel(
+            recordingDiscardedWith: telemetry,
+            marksAudioDiscontinuity: false
+        )
         let core = core
         Task.detached(priority: .utility) {
             await core.cancel()
@@ -477,14 +480,11 @@ final class StreamingTranscriptionService:
         let now = ProcessInfo.processInfo.systemUptime
         switch audioQueue.enqueue(data, now: now) {
         case .enqueued(let depth, let oldestAge):
-            let exceededBudget = telemetry.recordEnqueue(
+            telemetry.recordEnqueue(
                 byteCount: data.count,
                 depth: depth,
                 oldestAge: oldestAge
             )
-            if exceededBudget {
-                audioQueue.cancel()
-            }
         case .enqueuedDroppingOldest(
             let droppedBytes,
             let droppedAge,
@@ -497,10 +497,19 @@ final class StreamingTranscriptionService:
                 oldestAge: oldestAge
             )
             telemetry.recordDropped(byteCount: droppedBytes, age: droppedAge)
-            audioQueue.cancel()
-        case .terminated:
+            audioQueue.cancel(
+                recordingDiscardedWith: telemetry,
+                marksAudioDiscontinuity: true,
+                now: now
+            )
+        case .terminated(let marksAudioDiscontinuity):
             telemetry.recordEnqueue(byteCount: data.count, depth: 0, oldestAge: 0)
-            telemetry.recordDropped(byteCount: data.count, age: 0)
+            telemetry.recordDiscarded(
+                chunkCount: 1,
+                byteCount: data.count,
+                maximumAge: 0,
+                marksAudioDiscontinuity: marksAudioDiscontinuity
+            )
         }
     }
 
@@ -531,7 +540,10 @@ final class StreamingTranscriptionService:
     func cancel() {
         // Close ingress synchronously so the realtime callback cannot add work
         // while actor teardown waits to run.
-        audioQueue.cancel()
+        audioQueue.cancel(
+            recordingDiscardedWith: telemetry,
+            marksAudioDiscontinuity: false
+        )
         telemetry.setState(.cancelled)
         connectionTask?.cancel()
         let core = core

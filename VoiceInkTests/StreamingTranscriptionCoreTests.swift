@@ -93,13 +93,14 @@ struct StreamingTranscriptionCoreTests {
         }
 
         let metrics = service.metricsSnapshot
-        #expect(metrics.droppedChunks > 0)
+        #expect(metrics.sentChunks + metrics.droppedChunks == metrics.receivedChunks)
+        #expect(metrics.sentBytes + metrics.droppedBytes == metrics.receivedBytes)
         #expect(metrics.audioDiscontinuity == .audioDropped)
         #expect(provider.commitCallCount == 0)
     }
 
     @MainActor
-    @Test func slowSingleSendTripsHardAgeBoundBeforeCommit() async throws {
+    @Test func slowSingleSendReportsAgeBudgetWithoutRejectingContinuousAudio() async throws {
         let provider = LockedStreamingProvider(
             commitEvents: [.committed(text: "continuous")],
             sendDelayNanoseconds: 130_000_000
@@ -108,22 +109,57 @@ struct StreamingTranscriptionCoreTests {
         try await start(service)
         service.sendAudioChunk(Data([0x01]))
 
-        do {
-            _ = try await service.stopAndGetFinalText()
-            Issue.record("Expected hard queue-age bound to reject realtime final")
-        } catch StreamingTranscriptionError.transportOverloaded(let age) {
-            #expect(age >= 0.100)
-        } catch {
-            Issue.record("Expected transportOverloaded, got \(error)")
-        }
+        let text = try await service.stopAndGetFinalText()
         let metrics = service.metricsSnapshot
 
+        #expect(text == "continuous")
         #expect(metrics.sentChunks == 1)
         #expect(metrics.droppedChunks == 0)
         #expect(metrics.queueAgeBudgetExceeded)
         #expect(metrics.maximumQueueAge >= 0.100)
-        #expect(metrics.audioDiscontinuity == .queueAgeExceeded)
-        #expect(provider.commitCallCount == 0)
+        #expect(metrics.audioDiscontinuity == nil)
+        #expect(provider.commitCallCount == 1)
+    }
+
+    @MainActor
+    @Test func halfSecondHandshakePreservesStartupAudioAndPublishesPartial() async throws {
+        let provider = LockedStreamingProvider(
+            commitEvents: [.committed(text: "complete")],
+            connectDelayNanoseconds: 500_000_000,
+            partialTextOnFirstAudio: "live words"
+        )
+        var snapshots: [StreamingTranscriptSnapshot] = []
+        let service = try makeService(
+            provider: provider,
+            partialPublicationInterval: 0.010,
+            onTranscriptSnapshot: { snapshots.append($0) }
+        )
+        let startTask = service.requestStartTask(
+            model: streamingCoreModel(),
+            context: TranscriptionRequestContext(language: "en", prompt: nil)
+        )
+
+        let chunkCount = 50
+        for index in 0..<chunkCount {
+            service.sendAudioChunk(Data([UInt8(index)]))
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+        try await startTask.value
+
+        let partialPublished = await waitUntil(timeout: 1) {
+            snapshots.last?.partial == "live words"
+        }
+        let text = try await service.stopAndGetFinalText()
+        let metrics = service.metricsSnapshot
+
+        #expect(partialPublished)
+        #expect(text == "complete")
+        #expect(provider.sentChunks == chunkCount)
+        #expect(metrics.receivedChunks == chunkCount)
+        #expect(metrics.sentChunks == chunkCount)
+        #expect(metrics.droppedChunks == 0)
+        #expect(metrics.audioDiscontinuity == nil)
+        #expect(provider.commitCallCount == 1)
     }
 
     @MainActor
@@ -386,22 +422,91 @@ struct StreamingTranscriptionCoreTests {
     @MainActor
     @Test func cancellationSealsIngressAndDisconnectsProvider() async throws {
         let provider = LockedStreamingProvider(
-            commitEvents: [.committed(text: "unused")]
+            commitEvents: [.committed(text: "unused")],
+            sendDelayNanoseconds: 5_000_000_000
         )
         let service = try makeService(provider: provider)
         try await start(service)
-        service.sendAudioChunk(Data([0x01]))
+        service.sendAudioChunk(Data([0x01, 0x02]))
+        let sendStarted = await waitUntil(timeout: 1) {
+            provider.sendAttemptCount == 1
+        }
+        #expect(sendStarted)
+        service.sendAudioChunk(Data([0x03, 0x04, 0x05]))
 
         service.cancel()
-        service.sendAudioChunk(Data([0x02]))
+        service.sendAudioChunk(Data([0x06]))
         let disconnected = await waitUntil(timeout: 1) {
             provider.disconnectCallCount == 1
         }
+        let metrics = service.metricsSnapshot
 
         #expect(disconnected)
-        #expect(service.metricsSnapshot.state == .cancelled)
-        #expect(service.metricsSnapshot.droppedChunks >= 1)
+        #expect(metrics.state == .cancelled)
+        #expect(metrics.receivedChunks == 3)
+        #expect(metrics.sentChunks == 0)
+        #expect(metrics.droppedChunks == 3)
+        #expect(metrics.receivedBytes == 6)
+        #expect(metrics.sentBytes == 0)
+        #expect(metrics.droppedBytes == 6)
+        #expect(metrics.audioDiscontinuity == nil)
         #expect(provider.commitCallCount == 0)
+    }
+
+    @MainActor
+    @Test func providerErrorClaimsInFlightAndBufferedAudioBeforeCommit() async throws {
+        let provider = LockedStreamingProvider(
+            commitEvents: [.committed(text: "must not commit")],
+            sendDelayNanoseconds: 5_000_000_000
+        )
+        let service = try makeService(provider: provider)
+        try await start(service)
+        service.sendAudioChunk(Data([0x01, 0x02]))
+        let sendStarted = await waitUntil(timeout: 1) {
+            provider.sendAttemptCount == 1
+        }
+        #expect(sendStarted)
+        service.sendAudioChunk(Data([0x03, 0x04, 0x05]))
+
+        let finalization = service.requestFinalizationTask()
+        provider.emit(.error(StreamingTranscriptionError.serverError("terminal")))
+
+        do {
+            _ = try await finalization.value
+            Issue.record("Expected the provider error to win before commit")
+        } catch StreamingTranscriptionError.serverError(let message) {
+            #expect(message == "terminal")
+        } catch {
+            Issue.record("Expected provider serverError, got \(error)")
+        }
+
+        let metrics = service.metricsSnapshot
+        #expect(metrics.receivedChunks == 2)
+        #expect(metrics.sentChunks == 0)
+        #expect(metrics.droppedChunks == 2)
+        #expect(metrics.receivedBytes == 5)
+        #expect(metrics.sentBytes == 0)
+        #expect(metrics.droppedBytes == 5)
+        #expect(metrics.audioDiscontinuity == nil)
+        #expect(provider.commitCallCount == 0)
+    }
+
+    @Test func commitSealCannotBeDowngradedByCleanupBeforeLateIngress() {
+        let queue = StreamingAudioQueue(capacity: 2)
+        let telemetry = StreamingTelemetry(maximumPermittedQueueAge: 0.100)
+
+        queue.requestCommit()
+        queue.cancel(
+            recordingDiscardedWith: telemetry,
+            marksAudioDiscontinuity: false
+        )
+
+        switch queue.enqueue(Data([0x01, 0x02])) {
+        case .terminated(let marksAudioDiscontinuity):
+            #expect(marksAudioDiscontinuity)
+        default:
+            Issue.record("Expected commit-sealed ingress to remain terminal")
+        }
     }
 
     @MainActor
@@ -570,7 +675,9 @@ private final class LockedStreamingProvider: StreamingTranscriptionProvider, @un
     private let disconnectDelayNanoseconds: UInt64
     private let ignoresConnectCancellation: Bool
     private let emitsFinalizedOnCommit: Bool
+    private let partialTextOnFirstAudio: String?
     private var _connectCallCount = 0
+    private var _sendAttemptCount = 0
     private var _sentChunks = 0
     private var _commitCallCount = 0
     private var _disconnectCallCount = 0
@@ -582,7 +689,8 @@ private final class LockedStreamingProvider: StreamingTranscriptionProvider, @un
         sendDelayNanoseconds: UInt64 = 0,
         disconnectDelayNanoseconds: UInt64 = 0,
         ignoresConnectCancellation: Bool = false,
-        emitsFinalizedOnCommit: Bool = true
+        emitsFinalizedOnCommit: Bool = true,
+        partialTextOnFirstAudio: String? = nil
     ) {
         self.commitEvents = commitEvents
         self.connectDelayNanoseconds = connectDelayNanoseconds
@@ -590,6 +698,7 @@ private final class LockedStreamingProvider: StreamingTranscriptionProvider, @un
         self.disconnectDelayNanoseconds = disconnectDelayNanoseconds
         self.ignoresConnectCancellation = ignoresConnectCancellation
         self.emitsFinalizedOnCommit = emitsFinalizedOnCommit
+        self.partialTextOnFirstAudio = partialTextOnFirstAudio
         let (stream, continuation) = AsyncStream.makeStream(
             of: StreamingTranscriptionEvent.self
         )
@@ -598,6 +707,7 @@ private final class LockedStreamingProvider: StreamingTranscriptionProvider, @un
     }
 
     var connectCallCount: Int { withLock { _connectCallCount } }
+    var sendAttemptCount: Int { withLock { _sendAttemptCount } }
     var sentChunks: Int { withLock { _sentChunks } }
     var commitCallCount: Int { withLock { _commitCallCount } }
     var disconnectCallCount: Int { withLock { _disconnectCallCount } }
@@ -622,10 +732,17 @@ private final class LockedStreamingProvider: StreamingTranscriptionProvider, @un
     }
 
     func sendAudioChunk(_ data: Data) async throws {
+        withLock { _sendAttemptCount += 1 }
         if sendDelayNanoseconds > 0 {
             try await Task.sleep(nanoseconds: sendDelayNanoseconds)
         }
-        withLock { _sentChunks += 1 }
+        let isFirstChunk = withLock {
+            _sentChunks += 1
+            return _sentChunks == 1
+        }
+        if isFirstChunk, let partialTextOnFirstAudio {
+            eventContinuation.yield(.partial(text: partialTextOnFirstAudio))
+        }
     }
 
     func commit() async throws {

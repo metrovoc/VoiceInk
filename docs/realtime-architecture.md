@@ -17,11 +17,18 @@ budgets:
 | Recording request to realtime preconnect request | 50 ms |
 | Stop request to provider commit request | 50 ms |
 | Partial event received to UI publication | 50 ms |
-| Oldest streaming audio queue item | 100 ms |
+| Oldest connected-transport audio queue item | 100 ms |
 
 `RealtimePerformanceTrace` records these milestones with the monotonic system
 clock. A recording has one trace ID from trigger through delivery, so local
 latency cannot be hidden inside a provider measurement.
+
+Provider connection time is external latency. Audio captured during that
+handshake is retained in the bounded startup backlog, and its local queue-age
+clock begins when the transport becomes writable. The 100 ms value is an SLO
+and an observable lag signal, not an audio-integrity boundary. Only an actual
+capacity overflow or delivery loss makes a realtime stream discontinuous and
+forces complete-file fallback.
 
 ## Ownership
 
@@ -65,6 +72,9 @@ operations remain owned by the streaming core and its side lanes.
    the complete recorded file for batch fallback; it never presents a transcript
    produced from known-incomplete audio as final. File-writer overflow or write
    failure is independently exposed and prevents uploading that incomplete file.
+   Queue cancellation and discard accounting are one atomic lifecycle operation:
+   every accepted chunk reaches exactly one terminal disposition, sent or
+   discarded, including in-flight audio during error and cancellation races.
 3. Stop closes AUHAL immediately, drains the bounded streaming handoff, and
    requests provider finalization as soon as that complete tail crosses the
    streaming barrier. File draining continues independently after the barrier,
@@ -76,6 +86,8 @@ operations remain owned by the streaming core and its side lanes.
    resources.
 4. One session owns exactly one provider connection, event consumer, audio
    consumer, and finalization result. Cancellation tears down all four.
+   Provider commit requires an actor-owned lifecycle claim; a failure or cancel
+   that wins that claim prevents the wire-level commit call.
    Ordinary committed text is never treated as the acknowledgement for an
    explicit end-of-audio request; every provider maps its wire-level terminal
    event to a distinct `finalized` event. Provider partials use one replaceable
@@ -127,7 +139,10 @@ operations remain owned by the streaming core and its side lanes.
 Every streaming audio item carries its enqueue time. Queue metrics track total
 requested/sent/dropped chunks, current and maximum depth, oldest and maximum
 age, and lifecycle timestamps. Queue size alone is not a sufficient health
-signal: a shallow but old queue is also over budget.
+signal: a shallow but old connected-transport queue is also over budget. An age
+breach remains visible in telemetry while lossless draining continues; killing
+the queue at an elapsed-time threshold would turn an external handshake or a
+transient socket stall into guaranteed data loss.
 
 The Core Audio callback performs no lock acquisition, allocation, executor hop,
 or user closure invocation. It only copies into preallocated SPSC storage and
@@ -147,7 +162,13 @@ created per audio sample or per partial transcript.
 ## Release gate
 
 A realtime change is not complete until tests cover ordered draining, audio
-before connection, overflow fallback, event storms, concurrent stop/cancel,
-final-ack timeout, disconnect timeout, stable transcript revisions, latest-value
+before a realistic 500 ms connection handshake, visible partial delivery,
+overflow fallback, event storms, concurrent stop/cancel,
+provider-error/commit races, chunk-and-byte conservation, final-ack timeout,
+disconnect timeout, stable transcript revisions, latest-value
 meter behavior, empty context plans, and sustained high-volume chunk delivery.
-The full unit suite and a Release build must also pass.
+Cloud adapters must additionally pass their dependency's wire-contract tests:
+an ordinary provider segment cannot acknowledge the final request, and the
+provider-specific finalization marker must do so exactly once. The full unit
+suite, a Release build, and a live check of the active cloud provider must also
+pass.

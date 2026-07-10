@@ -39,7 +39,6 @@ private final class StreamingLegacyTranscriptAccumulator: @unchecked Sendable {
 }
 
 enum StreamingAudioDiscontinuity: Sendable, Equatable {
-    case queueAgeExceeded
     case audioDropped
 }
 
@@ -89,7 +88,7 @@ final class StreamingAudioQueue: @unchecked Sendable {
             depth: Int,
             oldestAge: TimeInterval
         )
-        case terminated
+        case terminated(marksAudioDiscontinuity: Bool)
     }
 
     enum DequeueResult {
@@ -103,6 +102,12 @@ final class StreamingAudioQueue: @unchecked Sendable {
         let oldestAge: TimeInterval
     }
 
+    struct DiscardedAudio {
+        let chunks: Int
+        let bytes: Int
+        let maximumAge: TimeInterval
+    }
+
     private enum TerminalMode {
         case open
         case commit
@@ -113,8 +118,14 @@ final class StreamingAudioQueue: @unchecked Sendable {
     private var storage: [QueuedAudioChunk?]
     private var head = 0
     private var count = 0
+    private var inFlight: QueuedAudioChunk?
     private var terminalMode: TerminalMode = .open
+    private var terminatedIngressMarksAudioDiscontinuity = false
     private var waiter: CheckedContinuation<DequeueResult, Never>?
+    /// Provider connection time is external latency. Audio captured before the
+    /// transport is ready remains lossless startup backlog, but its local queue
+    /// age budget begins only when that backlog can actually be drained.
+    private var transportReadyAt: TimeInterval?
 
     init(capacity: Int) {
         storage = Array(repeating: nil, count: max(1, capacity))
@@ -127,12 +138,17 @@ final class StreamingAudioQueue: @unchecked Sendable {
 
         lock.lock()
         guard terminalMode == .open else {
+            let marksAudioDiscontinuity = terminatedIngressMarksAudioDiscontinuity
             lock.unlock()
-            return .terminated
+            return .terminated(
+                marksAudioDiscontinuity: marksAudioDiscontinuity
+            )
         }
 
         if let waiter {
             self.waiter = nil
+            precondition(inFlight == nil, "StreamingAudioQueue already has in-flight audio")
+            inFlight = chunk
             waiterToResume = waiter
             result = .enqueued(depth: 0, oldestAge: 0)
         } else if count < storage.count {
@@ -143,7 +159,7 @@ final class StreamingAudioQueue: @unchecked Sendable {
             insertAtTail(chunk)
             result = .enqueuedDroppingOldest(
                 droppedBytes: dropped?.data.count ?? 0,
-                droppedAge: dropped.map { max(0, now - $0.enqueuedAt) } ?? 0,
+                droppedAge: dropped.map { queueAgeLocked(of: $0, now: now) } ?? 0,
                 depth: count,
                 oldestAge: oldestAgeLocked(now: now)
             )
@@ -160,6 +176,8 @@ final class StreamingAudioQueue: @unchecked Sendable {
 
             lock.lock()
             if let chunk = removeHeadLocked() {
+                precondition(inFlight == nil, "StreamingAudioQueue already has in-flight audio")
+                inFlight = chunk
                 immediate = .audio(chunk)
             } else {
                 switch terminalMode {
@@ -181,6 +199,37 @@ final class StreamingAudioQueue: @unchecked Sendable {
         }
     }
 
+    func markTransportReady(
+        at timestamp: TimeInterval = ProcessInfo.processInfo.systemUptime
+    ) {
+        lock.lock()
+        if transportReadyAt == nil {
+            transportReadyAt = timestamp
+        }
+        lock.unlock()
+    }
+
+    func queueAge(
+        of chunk: QueuedAudioChunk,
+        now: TimeInterval = ProcessInfo.processInfo.systemUptime
+    ) -> TimeInterval {
+        lock.lock()
+        let age = queueAgeLocked(of: chunk, now: now)
+        lock.unlock()
+        return age
+    }
+
+    /// Completes the single provider send. A false result means cancellation
+    /// already claimed the in-flight chunk as discarded, so telemetry must not
+    /// count it again as sent.
+    func completeInFlight() -> Bool {
+        lock.lock()
+        let completed = inFlight != nil
+        inFlight = nil
+        lock.unlock()
+        return completed
+    }
+
     /// Seals audio ingress and places a commit command after all buffered audio.
     /// The single consumer therefore provides ordering without a second drain
     /// task or a provider-level lock.
@@ -193,6 +242,7 @@ final class StreamingAudioQueue: @unchecked Sendable {
             return
         }
         terminalMode = .commit
+        terminatedIngressMarksAudioDiscontinuity = true
         if count == 0 {
             waiterToResume = waiter
             waiter = nil
@@ -207,18 +257,33 @@ final class StreamingAudioQueue: @unchecked Sendable {
 
     /// Cancels immediately and discards buffered audio. This is intentionally
     /// distinct from requestCommit(): cancellation can never accidentally send
-    /// a final provider command.
-    func cancel() {
+    /// a final provider command. Queue cancellation and discard telemetry share
+    /// one entry point so every chunk has exactly one terminal disposition.
+    @discardableResult
+    func cancel(
+        recordingDiscardedWith telemetry: StreamingTelemetry,
+        marksAudioDiscontinuity: Bool,
+        now: TimeInterval = ProcessInfo.processInfo.systemUptime
+    ) -> DiscardedAudio {
         var waiterToResume: CheckedContinuation<DequeueResult, Never>?
 
         lock.lock()
+        terminatedIngressMarksAudioDiscontinuity =
+            terminatedIngressMarksAudioDiscontinuity || marksAudioDiscontinuity
         terminalMode = .cancelled
-        clearLocked()
+        let discarded = clearLocked(now: now)
         waiterToResume = waiter
         waiter = nil
         lock.unlock()
 
+        telemetry.recordDiscarded(
+            chunkCount: discarded.chunks,
+            byteCount: discarded.bytes,
+            maximumAge: discarded.maximumAge,
+            marksAudioDiscontinuity: marksAudioDiscontinuity
+        )
         waiterToResume?.resume(returning: .cancelled)
+        return discarded
     }
 
     func snapshot(now: TimeInterval = ProcessInfo.processInfo.systemUptime) -> Snapshot {
@@ -243,15 +308,40 @@ final class StreamingAudioQueue: @unchecked Sendable {
         return chunk
     }
 
-    private func clearLocked() {
-        while count > 0 {
-            _ = removeHeadLocked()
+    private func clearLocked(now: TimeInterval) -> DiscardedAudio {
+        var chunks = 0
+        var bytes = 0
+        var maximumAge: TimeInterval = 0
+        if let inFlight {
+            chunks += 1
+            bytes += inFlight.data.count
+            maximumAge = max(maximumAge, queueAgeLocked(of: inFlight, now: now))
+            self.inFlight = nil
         }
+        while count > 0 {
+            guard let chunk = removeHeadLocked() else { break }
+            chunks += 1
+            bytes += chunk.data.count
+            maximumAge = max(maximumAge, queueAgeLocked(of: chunk, now: now))
+        }
+        return DiscardedAudio(
+            chunks: chunks,
+            bytes: bytes,
+            maximumAge: maximumAge
+        )
     }
 
     private func oldestAgeLocked(now: TimeInterval) -> TimeInterval {
         guard count > 0, let oldest = storage[head] else { return 0 }
-        return max(0, now - oldest.enqueuedAt)
+        return queueAgeLocked(of: oldest, now: now)
+    }
+
+    private func queueAgeLocked(
+        of chunk: QueuedAudioChunk,
+        now: TimeInterval
+    ) -> TimeInterval {
+        guard let transportReadyAt else { return 0 }
+        return max(0, now - max(chunk.enqueuedAt, transportReadyAt))
     }
 }
 
@@ -287,8 +377,7 @@ final class StreamingTelemetry: @unchecked Sendable {
         lock.unlock()
     }
 
-    @discardableResult
-    func recordEnqueue(byteCount: Int, depth: Int, oldestAge: TimeInterval) -> Bool {
+    func recordEnqueue(byteCount: Int, depth: Int, oldestAge: TimeInterval) {
         lock.lock()
         receivedChunks += 1
         receivedBytes += byteCount
@@ -296,39 +385,45 @@ final class StreamingTelemetry: @unchecked Sendable {
         maximumQueueAge = max(maximumQueueAge, oldestAge)
         if oldestAge > maximumPermittedQueueAge {
             queueAgeBudgetExceeded = true
-            if audioDiscontinuity == nil {
-                audioDiscontinuity = .queueAgeExceeded
-            }
         }
-        let exceeded = oldestAge > maximumPermittedQueueAge
         lock.unlock()
-        return exceeded
     }
 
     func recordDropped(byteCount: Int, age: TimeInterval) {
+        recordDiscarded(
+            chunkCount: 1,
+            byteCount: byteCount,
+            maximumAge: age,
+            marksAudioDiscontinuity: true
+        )
+    }
+
+    func recordDiscarded(
+        chunkCount: Int,
+        byteCount: Int,
+        maximumAge: TimeInterval,
+        marksAudioDiscontinuity: Bool
+    ) {
+        guard chunkCount > 0 else { return }
         lock.lock()
-        droppedChunks += 1
+        droppedChunks += chunkCount
         droppedBytes += byteCount
-        maximumQueueAge = max(maximumQueueAge, age)
-        audioDiscontinuity = .audioDropped
+        maximumQueueAge = max(maximumQueueAge, maximumAge)
+        if marksAudioDiscontinuity, audioDiscontinuity == nil {
+            audioDiscontinuity = .audioDropped
+        }
         lock.unlock()
     }
 
-    @discardableResult
-    func recordSent(byteCount: Int, queueAge: TimeInterval) -> Bool {
+    func recordSent(byteCount: Int, queueAge: TimeInterval) {
         lock.lock()
         sentChunks += 1
         sentBytes += byteCount
         maximumQueueAge = max(maximumQueueAge, queueAge)
         if queueAge > maximumPermittedQueueAge {
             queueAgeBudgetExceeded = true
-            if audioDiscontinuity == nil {
-                audioDiscontinuity = .queueAgeExceeded
-            }
         }
-        let exceeded = queueAge > maximumPermittedQueueAge
         lock.unlock()
-        return exceeded
     }
 
     func markStopRequested(at timestamp: TimeInterval = ProcessInfo.processInfo.systemUptime) {
@@ -495,7 +590,10 @@ actor StreamingTranscriptionCore {
         sendTask?.cancel()
         eventConsumerTask?.cancel()
         partialCoalescer.cancel()
-        audioQueue.cancel()
+        audioQueue.cancel(
+            recordingDiscardedWith: telemetry,
+            marksAudioDiscontinuity: false
+        )
         activity.end()
     }
 
@@ -545,6 +643,7 @@ actor StreamingTranscriptionCore {
         startEventConsumer(provider: provider)
 
         do {
+            performanceTrace?.mark(.providerConnectStarted)
             try await provider.connect(model: model, language: language)
         } catch is CancellationError where state == .cancelled {
             resolveConnectionWaiters(with: .failure(CancellationError()))
@@ -566,6 +665,7 @@ actor StreamingTranscriptionCore {
             throw CancellationError()
         }
 
+        audioQueue.markTransportReady()
         transition(to: .streaming)
         startSendLoop(provider: provider)
         resolveConnectionWaiters(with: .success(()))
@@ -600,7 +700,10 @@ actor StreamingTranscriptionCore {
         transition(to: .cancelled)
         resolveConnectionWaiters(with: .failure(CancellationError()))
         finalizationTask?.cancel()
-        audioQueue.cancel()
+        audioQueue.cancel(
+            recordingDiscardedWith: telemetry,
+            marksAudioDiscontinuity: false
+        )
         if wasConnecting {
             // `start()` still exclusively owns provider.connect(). It will run
             // cleanup after connect returns/throws; disconnecting here would
@@ -651,6 +754,9 @@ actor StreamingTranscriptionCore {
 
         do {
             let sendCompletion = try await waitForSendLoopCompletion()
+            if let failure {
+                throw failure
+            }
             switch sendCompletion {
             case .committed:
                 break
@@ -697,25 +803,33 @@ actor StreamingTranscriptionCore {
                     try Task.checkCancellation()
                     switch await audioQueue.next() {
                     case .audio(let chunk):
-                        try await provider.sendAudioChunk(chunk.data)
-                        let exceededBudget = telemetry.recordSent(
-                            byteCount: chunk.data.count,
-                            queueAge: max(
-                                0,
-                                ProcessInfo.processInfo.systemUptime - chunk.enqueuedAt
+                        do {
+                            try Task.checkCancellation()
+                            try await provider.sendAudioChunk(chunk.data)
+                            let queueAge = audioQueue.queueAge(
+                                of: chunk,
+                                now: ProcessInfo.processInfo.systemUptime
                             )
-                        )
-                        if exceededBudget {
-                            audioQueue.cancel()
-                            throw StreamingTranscriptionError.transportOverloaded(
-                                maximumQueueAge: telemetry.snapshot(
-                                    queue: audioQueue.snapshot()
-                                ).maximumQueueAge
+                            if audioQueue.completeInFlight() {
+                                telemetry.recordSent(
+                                    byteCount: chunk.data.count,
+                                    queueAge: queueAge
+                                )
+                            }
+                        } catch {
+                            audioQueue.cancel(
+                                recordingDiscardedWith: telemetry,
+                                marksAudioDiscontinuity: false
                             )
+                            throw error
                         }
                     case .commit:
                         let commitTimestamp = ProcessInfo.processInfo.systemUptime
-                        await self?.beginExplicitCommit(at: commitTimestamp)
+                        guard await self?.beginExplicitCommit(at: commitTimestamp) == true else {
+                            completion = .cancelled
+                            break sendLoop
+                        }
+                        try Task.checkCancellation()
                         try await provider.commit()
                         completion = .committed
                         break sendLoop
@@ -801,7 +915,11 @@ actor StreamingTranscriptionCore {
 
         case .error(let error):
             recordFailure(error)
-            audioQueue.cancel()
+            audioQueue.cancel(
+                recordingDiscardedWith: telemetry,
+                marksAudioDiscontinuity: false
+            )
+            sendTask?.cancel()
             if state == .connecting {
                 resolveConnectionWaiters(with: .failure(error))
             }
@@ -839,12 +957,13 @@ actor StreamingTranscriptionCore {
     /// Establishes the explicit-commit acknowledgement generation before the
     /// provider call. Ordinary committed segments observed while draining are
     /// still handled in `.streaming` and cannot satisfy the final waiter.
-    private func beginExplicitCommit(at timestamp: TimeInterval) {
-        guard state == .streaming else { return }
+    private func beginExplicitCommit(at timestamp: TimeInterval) -> Bool {
+        guard state == .streaming, failure == nil else { return false }
         awaitingExplicitCommitAck = true
         transition(to: .committing)
         telemetry.markCommitDispatched(at: timestamp)
         performanceTrace?.mark(.commitRequested, at: timestamp)
+        return true
     }
 
     private func waitForConnection() async throws {
@@ -943,10 +1062,6 @@ actor StreamingTranscriptionCore {
                 chunks: snapshot.droppedChunks,
                 bytes: snapshot.droppedBytes
             )
-        case .queueAgeExceeded:
-            throw StreamingTranscriptionError.transportOverloaded(
-                maximumQueueAge: snapshot.maximumQueueAge
-            )
         case nil:
             return
         }
@@ -960,7 +1075,10 @@ actor StreamingTranscriptionCore {
 
     private func cleanup(terminalState: StreamingState) async {
         partialCoalescer.cancel()
-        audioQueue.cancel()
+        audioQueue.cancel(
+            recordingDiscardedWith: telemetry,
+            marksAudioDiscontinuity: false
+        )
         let sendTaskToJoin = sendTask
         sendTaskToJoin?.cancel()
         sendTask = nil

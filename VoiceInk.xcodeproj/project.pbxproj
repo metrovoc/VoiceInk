@@ -491,7 +491,7 @@
 				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 26007000;
+				CURRENT_PROJECT_VERSION = 26007001;
 				DEVELOPMENT_ASSET_PATHS = "\"VoiceInk/Preview Content\"";
 				DEVELOPMENT_TEAM = "";
 				ENABLE_HARDENED_RUNTIME = YES;
@@ -506,7 +506,7 @@
 					"@executable_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 14.4;
-				MARKETING_VERSION = 26.7.0;
+				MARKETING_VERSION = 26.7.1;
 				PRODUCT_BUNDLE_IDENTIFIER = com.metrovoc.VoiceInk;
 				PRODUCT_NAME = "VoiceInk-CE";
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG ENABLE_NATIVE_SPEECH_ANALYZER $(inherited)";
@@ -525,7 +525,7 @@
 				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 26007000;
+				CURRENT_PROJECT_VERSION = 26007001;
 				DEVELOPMENT_ASSET_PATHS = "\"VoiceInk/Preview Content\"";
 				DEVELOPMENT_TEAM = "";
 				ENABLE_HARDENED_RUNTIME = YES;
@@ -540,7 +540,7 @@
 					"@executable_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 14.4;
-				MARKETING_VERSION = 26.7.0;
+				MARKETING_VERSION = 26.7.1;
 				PRODUCT_BUNDLE_IDENTIFIER = com.metrovoc.VoiceInk;
 				PRODUCT_NAME = "VoiceInk-CE";
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "ENABLE_NATIVE_SPEECH_ANALYZER $(inherited)";
@@ -712,7 +712,7 @@
 			repositoryURL = "https://github.com/metrovoc/LLMkit.git";
 			requirement = {
 				kind = exactVersion;
-				version = 1.80.1;
+				version = 1.80.2;
 			};
 		};
 		E1ECEC142E44590200DFFBA8 /* XCRemoteSwiftPackageReference "Zip" */ = {

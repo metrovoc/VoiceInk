@@ -9,6 +9,7 @@ struct RealtimePerformanceTraceTests {
         trace.mark(.recordingRequested, at: 10)
         trace.mark(.audioCaptureStarted, at: 10.2)
         trace.mark(.preconnectRequested, at: 10.23)
+        trace.mark(.providerConnectStarted, at: 10.31)
         trace.mark(.firstPartialReceived, at: 11)
         trace.mark(.firstPartialPublished, at: 11.025)
         trace.mark(.stopRequested, at: 20)
@@ -17,6 +18,7 @@ struct RealtimePerformanceTraceTests {
         let snapshot = trace.snapshot()
         #expect(abs((snapshot.requestToPreconnect ?? 0) - 0.23) < 0.000_001)
         #expect(abs((snapshot.requestToAudioCapture ?? 0) - 0.2) < 0.000_001)
+        #expect(abs((snapshot.requestToProviderConnect ?? 0) - 0.31) < 0.000_001)
         #expect(abs((snapshot.partialToPublish ?? 0) - 0.025) < 0.000_001)
         #expect(abs((snapshot.stopToCommit ?? 0) - 0.04) < 0.000_001)
     }
