@@ -10,7 +10,7 @@ class NotchWindowManager {
     private let makeView: (NotchRecorderMetricsModel) -> AnyView
 
     init(
-        engine: VoiceInkEngine,
+        presentation: RecorderPresentationModel,
         recorder: Recorder,
         assistantSession: AssistantSession,
         onRecordButtonTapped: @escaping () -> Void,
@@ -20,8 +20,8 @@ class NotchWindowManager {
         self.makeView = { metricsModel in
             AnyView(
                 NotchRecorderView(
-                    stateProvider: engine,
-                    recorder: recorder,
+                    presentation: presentation,
+                    audioMeterSource: recorder.audioMeterSource,
                     assistantSession: assistantSession,
                     metrics: metricsModel,
                     onRecordButtonTapped: onRecordButtonTapped,

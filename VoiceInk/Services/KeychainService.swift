@@ -5,11 +5,13 @@ import os
 /// Securely stores and retrieves API keys using Keychain with iCloud sync.
 /// For local (unsigned) builds, uses UserDefaults instead since Keychain
 /// requires stable code signing to reliably persist data across rebuilds.
-final class KeychainService {
+final class KeychainService: @unchecked Sendable {
     static let shared = KeychainService()
 
     private let logger = Logger(subsystem: "com.metrovoc.voiceink", category: "KeychainService")
     private let service = "com.metrovoc.VoiceInk"
+    private let testStorageLock = NSLock()
+    private var testStorage: [String: Data] = [:]
 
     #if LOCAL_BUILD
     private let defaults = UserDefaults.standard
@@ -17,6 +19,15 @@ final class KeychainService {
     #endif
 
     private init() {}
+
+    /// Unit-test bundles are injected into the app executable before app
+    /// initialization. Never contact the user's Keychain from that host: a
+    /// locked login keychain can block the main thread before tests even start.
+    private var usesEphemeralTestStorage: Bool {
+        let environment = ProcessInfo.processInfo.environment
+        return environment["XCTestConfigurationFilePath"] != nil
+            || NSClassFromString("XCTestCase") != nil
+    }
 
     // MARK: - Public API
 
@@ -33,6 +44,12 @@ final class KeychainService {
     /// Saves data to Keychain.
     @discardableResult
     func save(data: Data, forKey key: String, syncable: Bool = true) -> Bool {
+        if usesEphemeralTestStorage {
+            testStorageLock.lock()
+            testStorage[key] = data
+            testStorageLock.unlock()
+            return true
+        }
         #if LOCAL_BUILD
         defaults.set(data, forKey: localPrefix + key)
         return true
@@ -65,6 +82,12 @@ final class KeychainService {
 
     /// Retrieves data from Keychain.
     func getData(forKey key: String, syncable: Bool = true) -> Data? {
+        if usesEphemeralTestStorage {
+            testStorageLock.lock()
+            let data = testStorage[key]
+            testStorageLock.unlock()
+            return data
+        }
         #if LOCAL_BUILD
         return defaults.data(forKey: localPrefix + key)
         #else
@@ -88,6 +111,12 @@ final class KeychainService {
     /// Deletes an item from Keychain.
     @discardableResult
     func delete(forKey key: String, syncable: Bool = true) -> Bool {
+        if usesEphemeralTestStorage {
+            testStorageLock.lock()
+            testStorage[key] = nil
+            testStorageLock.unlock()
+            return true
+        }
         #if LOCAL_BUILD
         defaults.removeObject(forKey: localPrefix + key)
         return true
@@ -109,6 +138,12 @@ final class KeychainService {
 
     /// Checks if a key exists in Keychain.
     func exists(forKey key: String, syncable: Bool = true) -> Bool {
+        if usesEphemeralTestStorage {
+            testStorageLock.lock()
+            let exists = testStorage[key] != nil
+            testStorageLock.unlock()
+            return exists
+        }
         #if LOCAL_BUILD
         return defaults.data(forKey: localPrefix + key) != nil
         #else

@@ -1,7 +1,7 @@
 import Foundation
 import SwiftData
 
-enum MatchMode: String, Codable, CaseIterable {
+enum MatchMode: String, Codable, CaseIterable, Sendable {
     case literal = "Literal"
     case regex = "Regex"
 }

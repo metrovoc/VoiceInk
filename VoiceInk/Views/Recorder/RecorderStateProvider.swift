@@ -4,5 +4,4 @@ import Foundation
 @MainActor
 protocol RecorderStateProvider: AnyObject {
     var recordingState: RecordingState { get }
-    var partialTranscript: String { get }
 }

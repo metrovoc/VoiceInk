@@ -1,5 +1,4 @@
 import Foundation
-import SwiftData
 import os
 import AppKit
 
@@ -7,20 +6,18 @@ import AppKit
 final class ModelPrewarmService: ObservableObject {
     private let transcriptionModelManager: TranscriptionModelManager
     private let whisperModelManager: WhisperModelManager
-    private let modelContext: ModelContext
+    private let serviceRegistry: TranscriptionServiceRegistry
     private let logger = Logger(subsystem: "com.metrovoc.voiceink", category: "ModelPrewarm")
-    private lazy var serviceRegistry = TranscriptionServiceRegistry(
-        modelProvider: whisperModelManager,
-        modelsDirectory: whisperModelManager.modelsDirectory,
-        modelContext: modelContext
-    )
-    private let prewarmAudioURL = Bundle.main.url(forResource: "sound7", withExtension: "wav")
     private let prewarmEnabledKey = "PrewarmModelOnWake"
 
-    init(transcriptionModelManager: TranscriptionModelManager, whisperModelManager: WhisperModelManager, modelContext: ModelContext) {
+    init(
+        transcriptionModelManager: TranscriptionModelManager,
+        whisperModelManager: WhisperModelManager,
+        serviceRegistry: TranscriptionServiceRegistry
+    ) {
         self.transcriptionModelManager = transcriptionModelManager
         self.whisperModelManager = whisperModelManager
-        self.modelContext = modelContext
+        self.serviceRegistry = serviceRegistry
         setupNotifications()
         schedulePrewarmOnAppLaunch()
     }
@@ -66,11 +63,6 @@ final class ModelPrewarmService: ObservableObject {
     private func performPrewarm() async {
         guard shouldPrewarm() else { return }
 
-        guard let audioURL = prewarmAudioURL else {
-            logger.error("❌ Prewarm audio file (sound7.wav) not found")
-            return
-        }
-
         guard let transcriptionConfiguration = ModeRuntimeResolver.transcriptionConfiguration(
             transcriptionModelManager: transcriptionModelManager
         ) else {
@@ -83,11 +75,21 @@ final class ModelPrewarmService: ObservableObject {
         let startTime = Date()
 
         do {
-            let _ = try await serviceRegistry.transcribe(
-                audioURL: audioURL,
-                model: currentModel,
-                context: transcriptionConfiguration.requestContext
-            )
+            switch currentModel.provider {
+            case .whisper:
+                guard let model = whisperModelManager.availableModels.first(where: {
+                    $0.name == currentModel.name
+                }) else {
+                    throw VoiceInkEngineError.modelLoadFailed
+                }
+                try await whisperModelManager.loadModel(model)
+            case .fluidAudio:
+                try await serviceRegistry.fluidAudioTranscriptionService.loadModel(
+                    for: currentModel
+                )
+            default:
+                return
+            }
             let duration = Date().timeIntervalSince(startTime)
 
             logger.notice("Prewarm completed in \(String(format: "%.2f", duration), privacy: .public)s")

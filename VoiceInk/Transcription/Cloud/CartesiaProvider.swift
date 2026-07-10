@@ -23,8 +23,8 @@ struct CartesiaProvider: CloudProvider {
         )
     ]}
 
-    func makeStreamingProvider(modelContext: ModelContext) -> (any StreamingTranscriptionProvider)? {
-        CartesiaStreamingProvider(modelContext: modelContext)
+    func makeStreamingProvider(customVocabulary _: [String]) -> (any StreamingTranscriptionProvider)? {
+        CartesiaStreamingProvider()
     }
 
     func verifyAPIKey(_ key: String) async -> (isValid: Bool, errorMessage: String?) {

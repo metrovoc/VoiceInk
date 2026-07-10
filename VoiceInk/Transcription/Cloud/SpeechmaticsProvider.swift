@@ -5,6 +5,7 @@ import LLMkit
 struct SpeechmaticsProvider: CloudProvider {
     let modelProvider: ModelProvider = .speechmatics
     let providerKey: String = "Speechmatics"
+    let usesStreamingVocabulary = true
     let languageCodes: [String]? = [
         "ar", "ba", "eu", "be", "bn", "bg", "yue", "ca", "hr", "cs", "da",
         "nl", "en", "et", "fi", "fr", "gl", "de", "el", "he", "hi",
@@ -39,8 +40,8 @@ struct SpeechmaticsProvider: CloudProvider {
         )
     }
 
-    func makeStreamingProvider(modelContext: ModelContext) -> (any StreamingTranscriptionProvider)? {
-        SpeechmaticsStreamingProvider(modelContext: modelContext)
+    func makeStreamingProvider(customVocabulary: [String]) -> (any StreamingTranscriptionProvider)? {
+        SpeechmaticsStreamingProvider(customVocabulary: customVocabulary)
     }
 
     func verifyAPIKey(_ key: String) async -> (isValid: Bool, errorMessage: String?) {

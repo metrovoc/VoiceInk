@@ -1,6 +1,6 @@
 import Foundation
 
-struct TranscriptionRequestContext {
+struct TranscriptionRequestContext: Sendable {
     let language: String?
     let prompt: String?
 
@@ -14,7 +14,7 @@ struct TranscriptionRequestContext {
 
 /// A protocol defining the interface for a transcription service.
 /// This allows for a unified way to handle both local and cloud-based transcription models.
-protocol TranscriptionService {
+protocol TranscriptionService: Sendable {
     /// Transcribes the audio from a given file URL.
     ///
     /// - Parameters:

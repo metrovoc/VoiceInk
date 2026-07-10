@@ -1,7 +1,7 @@
 import Foundation
 import SwiftUI
 
-struct CustomPrompt: Identifiable, Codable, Equatable {
+struct CustomPrompt: Identifiable, Codable, Equatable, Sendable {
     let id: UUID
     let title: String
     let promptText: String

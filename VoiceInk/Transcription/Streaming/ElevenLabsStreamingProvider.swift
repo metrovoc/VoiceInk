@@ -2,18 +2,18 @@ import Foundation
 import LLMkit
 
 /// ElevenLabs streaming provider wrapping `LLMkit.ElevenLabsStreamingClient`.
-final class ElevenLabsStreamingProvider: StreamingTranscriptionProvider {
+final class ElevenLabsStreamingProvider: StreamingTranscriptionProvider, @unchecked Sendable {
 
     private let client = LLMkit.ElevenLabsStreamingClient()
-    private var eventsContinuation: AsyncStream<StreamingTranscriptionEvent>.Continuation?
+    private var eventsContinuation: StreamingProviderEventRelay?
     private var forwardingTask: Task<Void, Never>?
 
     private(set) var transcriptionEvents: AsyncStream<StreamingTranscriptionEvent>
 
     init() {
-        var continuation: AsyncStream<StreamingTranscriptionEvent>.Continuation!
-        transcriptionEvents = AsyncStream { continuation = $0 }
-        eventsContinuation = continuation
+        let relay = StreamingProviderEventRelay()
+        transcriptionEvents = relay.stream
+        eventsContinuation = relay
     }
 
     deinit {
@@ -76,6 +76,8 @@ final class ElevenLabsStreamingProvider: StreamingTranscriptionProvider {
                     self.eventsContinuation?.yield(.partial(text: text))
                 case .committed(let text):
                     self.eventsContinuation?.yield(.committed(text: text))
+                case .finalized:
+                    self.eventsContinuation?.yield(.finalized)
                 case .error(let message):
                     self.eventsContinuation?.yield(.error(StreamingTranscriptionError.serverError(message)))
                 }
@@ -93,7 +95,7 @@ final class ElevenLabsStreamingProvider: StreamingTranscriptionProvider {
         case .networkError(let detail):
             return StreamingTranscriptionError.connectionFailed(detail)
         default:
-            return StreamingTranscriptionError.serverError(llmError.localizedDescription ?? "Unknown error")
+            return StreamingTranscriptionError.serverError(llmError.localizedDescription)
         }
     }
 }

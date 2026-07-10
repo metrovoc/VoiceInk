@@ -34,10 +34,17 @@ struct AgreementConfig {
     var minPassConfidence: Float = 0.15
     // All words in the last 3 positions before a sentence boundary must meet this threshold to be confirmed.
     var minWordConfidence: Float = 0.6
+    /// A punctuation-free utterance must not retain audio until the 15-second
+    /// Core ML input limit. Once the stable hypothesis crosses this duration,
+    /// an agreed prefix is committed while a generous overlap remains mutable.
+    var maximumUnconfirmedDurationSeconds: Double = 9.0
+    var forcedConfirmationOverlapSeconds: Double = 3.0
 }
 
 struct AgreementResult {
-    let fullText: String
+    /// Mutable text that follows the last committed delta. Committed history is
+    /// intentionally not reconstructed here; the streaming core owns it.
+    let hypothesisText: String
     let newlyConfirmedText: String
 }
 
@@ -47,7 +54,6 @@ final class WordAgreementEngine {
 
     private let config: AgreementConfig
 
-    private var confirmedWords: [TimedWord] = []
     private var previousWords: [TimedWord] = []
     private var consecutiveAgreementCount: Int = 0
     private var isFirstPass: Bool = true
@@ -56,16 +62,11 @@ final class WordAgreementEngine {
     // Start time of the first unconfirmed word; used as the audio seek/trim point after confirmation.
     private(set) var hypothesisStartTime: Double = 0.0
 
-    var confirmedText: String {
-        confirmedWords.map(\.text).joined(separator: " ")
-    }
-
     init(config: AgreementConfig = AgreementConfig()) {
         self.config = config
     }
 
     func reset() {
-        confirmedWords = []
         previousWords = []
         consecutiveAgreementCount = 0
         isFirstPass = true
@@ -106,7 +107,13 @@ final class WordAgreementEngine {
             return makeResult(hypothesisWords: words, newlyConfirmedWords: [])
         }
 
-        let confirmUpTo = applyPunctuationRule(words: Array(words.prefix(commonPrefix.count)))
+        let stableWords = Array(words.prefix(commonPrefix.count))
+        let punctuationBoundary = applyPunctuationRule(words: stableWords)
+        let retentionBoundary = applyRetentionRule(
+            stableWords: stableWords,
+            latestEndTime: words.last?.endTime
+        )
+        let confirmUpTo = max(punctuationBoundary, retentionBoundary)
 
         guard confirmUpTo > 0 else {
             return makeResult(hypothesisWords: words, newlyConfirmedWords: [])
@@ -122,7 +129,6 @@ final class WordAgreementEngine {
         let newlyConfirmed = Array(words.prefix(confirmUpTo))
         let hypothesis = Array(words.dropFirst(confirmUpTo))
 
-        confirmedWords.append(contentsOf: newlyConfirmed)
         if let lastConfirmed = newlyConfirmed.last {
             confirmedEndTime = lastConfirmed.endTime
         }
@@ -236,18 +242,36 @@ final class WordAgreementEngine {
         return confirmCount
     }
 
+    /// Forces only an already-agreed prefix across the commit boundary. This
+    /// is not lossy windowing: the most recent overlap remains hypothesis, and
+    /// words that have not survived the normal agreement count are never
+    /// committed. Its sole purpose is to keep the unconfirmed PCM tail bounded
+    /// for arbitrarily long run-on speech without falling back at 15 seconds.
+    private func applyRetentionRule(
+        stableWords: [TimedWord],
+        latestEndTime: Double?
+    ) -> Int {
+        guard config.maximumUnconfirmedDurationSeconds > 0,
+              config.forcedConfirmationOverlapSeconds >= 0,
+              let latestEndTime,
+              latestEndTime - confirmedEndTime >= config.maximumUnconfirmedDurationSeconds else {
+            return 0
+        }
+
+        let retainAfter = latestEndTime - config.forcedConfirmationOverlapSeconds
+        guard let lastSafeIndex = stableWords.lastIndex(where: { $0.endTime <= retainAfter }) else {
+            return 0
+        }
+        let count = lastSafeIndex + 1
+        return count >= config.minWordsToConfirm ? count : 0
+    }
+
     private func makeResult(hypothesisWords: [TimedWord], newlyConfirmedWords: [TimedWord]) -> AgreementResult {
-        let confirmedText = confirmedWords.map(\.text).joined(separator: " ")
         let hypothesisText = hypothesisWords.map(\.text).joined(separator: " ")
         let newlyConfirmedText = newlyConfirmedWords.map(\.text).joined(separator: " ")
 
-        var fullParts: [String] = []
-        if !confirmedText.isEmpty { fullParts.append(confirmedText) }
-        if !hypothesisText.isEmpty { fullParts.append(hypothesisText) }
-        let fullText = fullParts.joined(separator: " ")
-
         return AgreementResult(
-            fullText: fullText,
+            hypothesisText: hypothesisText,
             newlyConfirmedText: newlyConfirmedText
         )
     }

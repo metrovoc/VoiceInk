@@ -1,6 +1,12 @@
 import Foundation
 import SwiftData
 
+struct TextRuleSnapshot: Sendable, Equatable {
+    let pattern: String
+    let replacement: String
+    let matchMode: MatchMode
+}
+
 struct RulePreviewStep {
     let rule: TextRule
     let output: String
@@ -20,7 +26,14 @@ class TextTransformService {
         var steps: [RulePreviewStep] = []
 
         for rule in rules where rule.isEnabled {
-            let output = shared.apply(rule: rule, to: current)
+            let output = apply(
+                rule: TextRuleSnapshot(
+                    pattern: rule.pattern,
+                    replacement: rule.replacement,
+                    matchMode: rule.matchMode
+                ),
+                to: current
+            )
             steps.append(RulePreviewStep(rule: rule, output: output, changed: output != current))
             current = output
         }
@@ -29,14 +42,30 @@ class TextTransformService {
     }
 
     func applyRules(to text: String, using context: ModelContext) -> String {
+        Self.applyRules(to: text, rules: enabledRules(using: context))
+    }
+
+    func enabledRules(using context: ModelContext) -> [TextRuleSnapshot] {
         let descriptor = FetchDescriptor<TextRule>(
             predicate: #Predicate { $0.isEnabled },
             sortBy: [SortDescriptor(\.dateAdded, order: .forward)]
         )
 
         guard let rules = try? context.fetch(descriptor), !rules.isEmpty else {
-            return text
+            return []
         }
+
+        return rules.map {
+            TextRuleSnapshot(
+                pattern: $0.pattern,
+                replacement: $0.replacement,
+                matchMode: $0.matchMode
+            )
+        }
+    }
+
+    static func applyRules(to text: String, rules: [TextRuleSnapshot]) -> String {
+        guard !rules.isEmpty else { return text }
 
         var result = text
 
@@ -47,7 +76,7 @@ class TextTransformService {
         return result
     }
 
-    private func apply(rule: TextRule, to text: String) -> String {
+    private static func apply(rule: TextRuleSnapshot, to text: String) -> String {
         guard !rule.pattern.isEmpty else { return text }
 
         switch rule.matchMode {
@@ -59,7 +88,7 @@ class TextTransformService {
         }
     }
 
-    private func applyRegex(pattern: String, replacement: String, to text: String) -> String {
+    private static func applyRegex(pattern: String, replacement: String, to text: String) -> String {
         guard let regex = try? NSRegularExpression(pattern: pattern, options: []) else {
             return text
         }

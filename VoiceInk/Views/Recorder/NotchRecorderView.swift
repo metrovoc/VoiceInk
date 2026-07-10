@@ -1,8 +1,8 @@
 import SwiftUI
 
-struct NotchRecorderView<S: RecorderStateProvider & ObservableObject>: View {
-    @ObservedObject var stateProvider: S
-    let recorder: Recorder
+struct NotchRecorderView: View {
+    @ObservedObject var presentation: RecorderPresentationModel
+    let audioMeterSource: AudioMeterSource
     @ObservedObject var assistantSession: AssistantSession
     @ObservedObject var metrics: NotchRecorderMetricsModel
     let onRecordButtonTapped: () -> Void
@@ -23,11 +23,11 @@ struct NotchRecorderView<S: RecorderStateProvider & ObservableObject>: View {
             return .assistant
         }
 
-        switch stateProvider.recordingState {
+        switch presentation.recordingState {
         case .starting:
             return .active
         case .recording:
-            let shouldShowLive = !stateProvider.partialTranscript.isEmpty
+            let shouldShowLive = presentation.hasLiveTranscript
             return shouldShowLive ? .liveText : .active
         case .transcribing, .enhancing:
             return .active
@@ -94,13 +94,8 @@ struct NotchRecorderView<S: RecorderStateProvider & ObservableObject>: View {
 
     private var shouldShowCloseButton: Bool {
         displayState == .assistant &&
-            stateProvider.recordingState == .idle &&
+            presentation.recordingState == .idle &&
             !assistantSession.isBusy
-    }
-
-    private var liveAssistantFollowUpText: String {
-        guard stateProvider.recordingState == .recording else { return "" }
-        return stateProvider.partialTranscript
     }
 
     // MARK: - Animation
@@ -150,7 +145,7 @@ struct NotchRecorderView<S: RecorderStateProvider & ObservableObject>: View {
                     RecorderCloseButton(action: onCloseTapped)
                 } else {
                     RecorderRecordButton(
-                        recordingState: stateProvider.recordingState,
+                        recordingState: presentation.recordingState,
                         action: onRecordButtonTapped
                     )
                 }
@@ -169,8 +164,8 @@ struct NotchRecorderView<S: RecorderStateProvider & ObservableObject>: View {
             HStack(spacing: 0) {
                 Spacer(minLength: 0)
                 RecorderStatusDisplay(
-                    currentState: stateProvider.recordingState,
-                    recorder: recorder,
+                    currentState: presentation.recordingState,
+                    audioMeterSource: audioMeterSource,
                     menuBarHeight: notchHeight
                 )
             }
@@ -192,7 +187,7 @@ struct NotchRecorderView<S: RecorderStateProvider & ObservableObject>: View {
         VStack(spacing: 0) {
             if displayState == .liveText {
                 Divider().background(Color.white.opacity(0.15))
-                LiveTranscriptView(text: stateProvider.partialTranscript)
+                LiveTranscriptView(model: presentation.liveTranscript)
                     .padding(.horizontal, 8)
             }
         }
@@ -206,7 +201,9 @@ struct NotchRecorderView<S: RecorderStateProvider & ObservableObject>: View {
                 Divider().background(Color.white.opacity(0.15))
                 AssistantPanelView(
                     session: assistantSession,
-                    liveFollowUpText: liveAssistantFollowUpText,
+                    liveTranscript: presentation.recordingState == .recording
+                        ? presentation.liveTranscript
+                        : nil,
                     onSend: onAssistantFollowUp
                 )
             }

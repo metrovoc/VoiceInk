@@ -1,7 +1,7 @@
 import Foundation
 import os
 
-enum PunctuationCleanupMode: String, Codable, CaseIterable, Identifiable {
+enum PunctuationCleanupMode: String, Codable, CaseIterable, Identifiable, Sendable {
     case keep = "keep"
     case removeAll = "removeAll"
     case removeTrailingPeriod = "removeTrailingPeriod"
@@ -58,6 +58,10 @@ struct TranscriptionOutputFilter {
     ]
 
     static func filter(_ text: String) -> String {
+        filter(text, fillerWords: FillerWordManager.shared.fillerWords)
+    }
+
+    static func filter(_ text: String, fillerWords: [String]) -> String {
         var filteredText = text
 
         // Remove <TAG>...</TAG> blocks
@@ -76,7 +80,7 @@ struct TranscriptionOutputFilter {
         }
 
         // Remove configured filler words. An empty list is naturally a no-op.
-        for fillerWord in FillerWordManager.shared.fillerWords {
+        for fillerWord in fillerWords {
             let pattern = "\\b\(NSRegularExpression.escapedPattern(for: fillerWord))\\b[,.]?"
             if let regex = try? NSRegularExpression(pattern: pattern, options: .caseInsensitive) {
                 let range = NSRange(filteredText.startIndex..., in: filteredText)

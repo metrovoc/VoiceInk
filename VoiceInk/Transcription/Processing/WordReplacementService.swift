@@ -1,24 +1,47 @@
 import Foundation
 import SwiftData
 
+struct WordReplacementRuleSnapshot: Sendable, Equatable {
+    let originalText: String
+    let replacementText: String
+}
+
 class WordReplacementService {
     static let shared = WordReplacementService()
 
     private init() {}
 
     func applyReplacements(to text: String, using context: ModelContext) -> String {
+        Self.applyReplacements(to: text, rules: enabledRules(using: context))
+    }
+
+    func enabledRules(using context: ModelContext) -> [WordReplacementRuleSnapshot] {
         let descriptor = FetchDescriptor<WordReplacement>(
             predicate: #Predicate { $0.isEnabled }
         )
 
         guard let replacements = try? context.fetch(descriptor), !replacements.isEmpty else {
-            return text // No replacements to apply
+            return []
         }
+
+        return replacements.map {
+            WordReplacementRuleSnapshot(
+                originalText: $0.originalText,
+                replacementText: $0.replacementText
+            )
+        }
+    }
+
+    static func applyReplacements(
+        to text: String,
+        rules: [WordReplacementRuleSnapshot]
+    ) -> String {
+        guard !rules.isEmpty else { return text }
 
         var modifiedText = text
 
         // Longest-first so specific triggers match before shorter overlapping ones
-        let sortedReplacements = replacements.sorted {
+        let sortedReplacements = rules.sorted {
             $0.originalText.count > $1.originalText.count
         }
 
@@ -59,7 +82,7 @@ class WordReplacementService {
         return modifiedText
     }
 
-    private func usesWordBoundaries(for text: String) -> Bool {
+    private static func usesWordBoundaries(for text: String) -> Bool {
         // Returns false for languages without spaces (CJK, Thai), true for spaced languages
         let nonSpacedScripts: [ClosedRange<UInt32>] = [
             0x3040...0x309F, // Hiragana

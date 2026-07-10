@@ -34,12 +34,12 @@ enum CloudTranscriptionError: Error, LocalizedError {
     }
 }
 
-class CloudTranscriptionService: TranscriptionService {
-    private let modelContext: ModelContext
-    private lazy var openAICompatibleService = OpenAICompatibleTranscriptionService()
+actor CloudTranscriptionService: TranscriptionService {
+    private let modelContainer: ModelContainer
+    private let openAICompatibleService = OpenAICompatibleTranscriptionService()
 
-    init(modelContext: ModelContext) {
-        self.modelContext = modelContext
+    init(modelContainer: ModelContainer) {
+        self.modelContainer = modelContainer
     }
 
     func transcribe(audioURL: URL, model: any TranscriptionModel, context: TranscriptionRequestContext) async throws -> String {
@@ -104,13 +104,14 @@ class CloudTranscriptionService: TranscriptionService {
     }
 
     private func getCustomDictionaryTerms() -> [String] {
-        let descriptor = FetchDescriptor<VocabularyWord>(sortBy: [SortDescriptor(\.word)])
+        let modelContext = ModelContext(modelContainer)
+        let descriptor = FetchDescriptor<VocabularyWord>()
         guard let vocabularyWords = try? modelContext.fetch(descriptor) else {
             return []
         }
         var seen = Set<String>()
         var unique: [String] = []
-        for word in vocabularyWords {
+        for word in vocabularyWords.sorted(by: { $0.word < $1.word }) {
             let trimmed = word.word.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !trimmed.isEmpty else { continue }
             let key = trimmed.lowercased()

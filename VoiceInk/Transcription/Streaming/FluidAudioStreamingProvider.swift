@@ -3,40 +3,88 @@ import Foundation
 import os
 
 /// Agreement-based on-device streaming transcription using FluidAudio ASR.
-final class FluidAudioStreamingProvider: StreamingTranscriptionProvider {
+///
+/// The provider retains only the unconfirmed PCM tail. Audio is addressed by
+/// absolute sample offset in a fixed-capacity segmented store, so a long
+/// recording neither shifts arrays nor grows resident memory with duration.
+final class FluidAudioStreamingProvider: StreamingTranscriptionProvider, @unchecked Sendable {
+    typealias TestingTranscriber = @Sendable ([Float]) async throws -> ASRResult
 
-    private let logger = Logger(subsystem: AppIdentity.loggerSubsystem, category: "FluidAudioStreaming")
-    private let fluidAudioService: FluidAudioTranscriptionService
-    private var eventsContinuation: AsyncStream<StreamingTranscriptionEvent>.Continuation?
+    private let logger = Logger(
+        subsystem: AppIdentity.loggerSubsystem,
+        category: "FluidAudioStreaming"
+    )
+    private let fluidAudioService: FluidAudioTranscriptionService?
+    private let testingTranscriber: TestingTranscriber?
+    private var eventsContinuation: StreamingProviderEventRelay?
 
     private(set) var transcriptionEvents: AsyncStream<StreamingTranscriptionEvent>
 
-    private var audioBuffer: [Float] = []
-    private let bufferLock = NSLock()
-    private let sampleRate: Double = 16000.0
-    // Samples trimmed from buffer front; subtract from absolute indices for buffer-relative access.
-    private var trimmedSampleCount: Int = 0
+    private let sampleRate = ASRConstants.sampleRate
+    private let maximumASRWindowSamples: Int
+    private let trailingSilenceSamples = ASRConstants.sampleRate
+    private let pcmBuffer: SegmentedPCMBuffer
 
     private var asrManager: AsrManager?
-    private var decoderLayerCount: Int = 0
+    private var decoderLayerCount = 0
     private var languageHint: Language?
     private let agreementEngine: WordAgreementEngine
     private let config: AgreementConfig
 
     private var transcriptionTask: Task<Void, Never>?
     private var isTranscribing = false
-    private var lastTranscribedSampleCount = 0
-    private let minimumAudioSamples = ASRConstants.minimumRequiredSamples(forSampleRate: ASRConstants.sampleRate)
-    private let minNewSamples = ASRConstants.minimumRequiredSamples(forSampleRate: ASRConstants.sampleRate)
+    private var lastTranscribedSampleOffset: Int64 = 0
+    private let minimumAudioSamples = ASRConstants.minimumRequiredSamples(
+        forSampleRate: ASRConstants.sampleRate
+    )
+    private let minNewSamples = ASRConstants.minimumRequiredSamples(
+        forSampleRate: ASRConstants.sampleRate
+    )
 
-    init(fluidAudioService: FluidAudioTranscriptionService, config: AgreementConfig = AgreementConfig()) {
+    private let failureLock = NSLock()
+    private var terminalFailure: Error?
+
+    init(
+        fluidAudioService: FluidAudioTranscriptionService,
+        config: AgreementConfig = AgreementConfig(),
+        maximumASRWindowSamples: Int = ASRConstants.maxModelSamples,
+        pcmBlockSize: Int = 4_096
+    ) {
         self.fluidAudioService = fluidAudioService
+        self.testingTranscriber = nil
         self.config = config
+        self.maximumASRWindowSamples = maximumASRWindowSamples
+        self.pcmBuffer = SegmentedPCMBuffer(
+            maximumRetainedSamples: maximumASRWindowSamples,
+            blockSize: pcmBlockSize
+        )
         self.agreementEngine = WordAgreementEngine(config: config)
 
-        var continuation: AsyncStream<StreamingTranscriptionEvent>.Continuation!
-        transcriptionEvents = AsyncStream { continuation = $0 }
-        eventsContinuation = continuation
+        let relay = StreamingProviderEventRelay()
+        transcriptionEvents = relay.stream
+        eventsContinuation = relay
+    }
+
+    /// Model-free initializer for deterministic provider lifecycle tests.
+    init(
+        config: AgreementConfig = AgreementConfig(),
+        maximumASRWindowSamples: Int = ASRConstants.maxModelSamples,
+        pcmBlockSize: Int = 4_096,
+        testingTranscriber: @escaping TestingTranscriber
+    ) {
+        self.fluidAudioService = nil
+        self.testingTranscriber = testingTranscriber
+        self.config = config
+        self.maximumASRWindowSamples = maximumASRWindowSamples
+        self.pcmBuffer = SegmentedPCMBuffer(
+            maximumRetainedSamples: maximumASRWindowSamples,
+            blockSize: pcmBlockSize
+        )
+        self.agreementEngine = WordAgreementEngine(config: config)
+
+        let relay = StreamingProviderEventRelay()
+        transcriptionEvents = relay.stream
+        eventsContinuation = relay
     }
 
     deinit {
@@ -45,41 +93,65 @@ final class FluidAudioStreamingProvider: StreamingTranscriptionProvider {
     }
 
     func connect(model: any TranscriptionModel, language: String?) async throws {
-        let version: AsrModelVersion = FluidAudioModelManager.asrVersion(for: model.name)
-        let models = try await fluidAudioService.getOrLoadModels(for: version)
+        if testingTranscriber == nil {
+            guard let fluidAudioService else {
+                throw StreamingTranscriptionError.notConnected
+            }
+            let version = FluidAudioModelManager.asrVersion(for: model.name)
+            let models = try await fluidAudioService.getOrLoadModels(for: version)
+            let manager = AsrManager(config: .default)
+            try await manager.loadModels(models)
+            asrManager = manager
+            decoderLayerCount = await manager.decoderLayerCount
+            languageHint = FluidAudioTranscriptionService.languageHint(
+                from: language,
+                model: model
+            )
+        } else {
+            asrManager = nil
+            decoderLayerCount = 0
+            languageHint = nil
+        }
 
-        let manager = AsrManager(config: .default)
-        try await manager.loadModels(models)
-        self.asrManager = manager
-        self.decoderLayerCount = await manager.decoderLayerCount
-        self.languageHint = FluidAudioTranscriptionService.languageHint(from: language, model: model)
-
+        resetFailure()
         agreementEngine.reset()
-        audioBuffer = []
-        trimmedSampleCount = 0
-        lastTranscribedSampleCount = 0
-
+        pcmBuffer.reset()
+        lastTranscribedSampleOffset = 0
         startTranscriptionLoop()
 
         eventsContinuation?.yield(.sessionStarted)
-        logger.notice("FluidAudio agreement streaming started for \(model.displayName, privacy: .public)")
+        logger.notice(
+            "FluidAudio agreement streaming started for \(model.displayName, privacy: .public) maxWindowSamples=\(self.maximumASRWindowSamples, privacy: .public)"
+        )
     }
 
     func sendAudioChunk(_ data: Data) async throws {
+        try throwIfFailed()
         let samples = PCMAudioConverter.float32Samples(fromPCM16Data: data)
-        bufferLock.lock()
-        audioBuffer.append(contentsOf: samples) 
-        bufferLock.unlock()
+        do {
+            try pcmBuffer.append(samples)
+        } catch let bufferError as SegmentedPCMBuffer.BufferError {
+            let error = makeWindowExceededError(bufferError)
+            recordAndPublishFailure(error)
+            throw error
+        }
     }
 
     func commit() async throws {
         transcriptionTask?.cancel()
         await transcriptionTask?.value
         transcriptionTask = nil
+        try throwIfFailed()
 
-        // Run a clean final ASR pass on the unconfirmed audio portion.
-        let remainingText = await transcribeRemainingAudio() ?? ""
-        eventsContinuation?.yield(.committed(text: remainingText))
+        do {
+            // A final clean pass covers exactly the still-unconfirmed tail.
+            let remainingText = try await transcribeRemainingAudio() ?? ""
+            eventsContinuation?.yield(.committed(text: remainingText))
+            eventsContinuation?.yield(.finalized)
+        } catch {
+            recordAndPublishFailure(error)
+            throw error
+        }
     }
 
     func disconnect() async {
@@ -92,19 +164,22 @@ final class FluidAudioStreamingProvider: StreamingTranscriptionProvider {
         decoderLayerCount = 0
         languageHint = nil
 
-        bufferLock.lock()
-        audioBuffer = []
-        trimmedSampleCount = 0
-        bufferLock.unlock()
+        pcmBuffer.reset()
         agreementEngine.reset()
+        resetFailure()
 
         eventsContinuation?.finish()
         logger.notice("FluidAudio agreement streaming disconnected")
     }
 
+    var pcmBufferSnapshot: SegmentedPCMBuffer.Snapshot {
+        pcmBuffer.snapshot()
+    }
+
     // MARK: - Private
 
     private func startTranscriptionLoop() {
+        transcriptionTask?.cancel()
         transcriptionTask = Task { [weak self] in
             while !Task.isCancelled {
                 do {
@@ -121,134 +196,173 @@ final class FluidAudioStreamingProvider: StreamingTranscriptionProvider {
     }
 
     private func runTranscriptionPass() async {
-        guard !isTranscribing else { return }
-        guard let asrManager else { return }
+        guard !isTranscribing, currentFailure() == nil else { return }
 
-        bufferLock.lock()
-        let absoluteSampleCount = trimmedSampleCount + audioBuffer.count
-        bufferLock.unlock()
+        let snapshot = pcmBuffer.snapshot()
+        let absoluteSampleEnd = snapshot.retainedRange.upperBound
+        guard absoluteSampleEnd - lastTranscribedSampleOffset >= Int64(minNewSamples) else {
+            return
+        }
 
-        guard absoluteSampleCount - lastTranscribedSampleCount >= minNewSamples else { return }
-        guard absoluteSampleCount >= minimumAudioSamples else { return }
+        let seekSample = unconfirmedStartSample()
+        guard absoluteSampleEnd - seekSample >= Int64(minimumAudioSamples) else { return }
+
+        let window: SegmentedPCMBuffer.Window
+        do {
+            guard let availableWindow = try pcmBuffer.window(
+                from: seekSample,
+                through: absoluteSampleEnd,
+                maximumSamples: maximumASRWindowSamples
+            ) else { return }
+            window = availableWindow
+        } catch let bufferError as SegmentedPCMBuffer.BufferError {
+            recordAndPublishFailure(makeWindowExceededError(bufferError))
+            return
+        } catch {
+            recordAndPublishFailure(error)
+            return
+        }
 
         isTranscribing = true
         defer { isTranscribing = false }
 
-        // Seek to the start of the first unconfirmed word so it isn't clipped.
-        let seekTime = agreementEngine.hypothesisStartTime > 0
-            ? agreementEngine.hypothesisStartTime
-            : agreementEngine.confirmedEndTime
-        let seekSample = max(0, Int(seekTime * sampleRate))
-
-        bufferLock.lock()
-        let bufferRelativeSeek = max(0, seekSample - trimmedSampleCount)
-        let sliceEnd = audioBuffer.count
-        guard bufferRelativeSeek < sliceEnd else {
-            bufferLock.unlock()
-            return
-        }
-        var audioSlice = Array(audioBuffer[bufferRelativeSeek..<sliceEnd])
-        bufferLock.unlock()
-
-        // Pad with 1s trailing silence for punctuation capture
-        let maxSingleChunkSamples = 240_000
-        let trailingSilenceSamples = 16_000
-        if audioSlice.count + trailingSilenceSamples <= maxSingleChunkSamples {
-            audioSlice += [Float](repeating: 0, count: trailingSilenceSamples)
-        }
-
-        guard audioSlice.count >= minimumAudioSamples else { return }
-
         do {
-            var state = TdtDecoderState.make(decoderLayers: decoderLayerCount)
-            let result = try await asrManager.transcribe(
-                audioSlice,
-                decoderState: &state,
-                language: languageHint
-            )
-            lastTranscribedSampleCount = absoluteSampleCount
+            let result = try await transcribe(paddedForASR(window.samples))
+            lastTranscribedSampleOffset = window.range.upperBound
 
             guard let tokenTimings = result.tokenTimings, !tokenTimings.isEmpty else {
-                if !result.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                    eventsContinuation?.yield(.partial(text: result.text))
+                let hypothesis = result.text.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !hypothesis.isEmpty {
+                    eventsContinuation?.yield(.partial(text: hypothesis))
                 }
                 return
             }
 
-            let timeOffset = Double(seekSample) / sampleRate
-            let words = WordAgreementEngine.mergeTokensToWords(tokenTimings, timeOffset: timeOffset)
+            let timeOffset = Double(window.range.lowerBound) / Double(sampleRate)
+            let words = WordAgreementEngine.mergeTokensToWords(
+                tokenTimings,
+                timeOffset: timeOffset
+            )
             guard !words.isEmpty else { return }
 
-            let agreementResult = agreementEngine.processTranscriptionResult(words: words, resultConfidence: result.confidence)
+            let agreementResult = agreementEngine.processTranscriptionResult(
+                words: words,
+                resultConfidence: result.confidence
+            )
 
             if !agreementResult.newlyConfirmedText.isEmpty {
-                let normalizedConfirmed = TextNormalizer.shared.normalizeSentence(agreementResult.newlyConfirmedText)
+                let normalizedConfirmed = TextNormalizer.shared.normalizeSentence(
+                    agreementResult.newlyConfirmedText
+                )
                 eventsContinuation?.yield(.committed(text: normalizedConfirmed))
             }
-            if !agreementResult.fullText.isEmpty {
-                eventsContinuation?.yield(.partial(text: agreementResult.fullText))
+            if !agreementResult.hypothesisText.isEmpty {
+                // Contract: partial is only the mutable uncommitted tail.
+                eventsContinuation?.yield(.partial(text: agreementResult.hypothesisText))
             }
 
-            // Trim audio up to the hypothesis start point, keeping unconfirmed audio intact.
-            let newHypothesisStartTime = agreementEngine.hypothesisStartTime
-            if newHypothesisStartTime > 0 {
-                let safeTrimPoint = max(0, Int(newHypothesisStartTime * sampleRate))
-                let samplesToTrim = safeTrimPoint - trimmedSampleCount
-                if samplesToTrim > 0 {
-                    bufferLock.lock()
-                    let actualTrim = min(samplesToTrim, audioBuffer.count)
-                    audioBuffer.removeFirst(actualTrim)
-                    trimmedSampleCount += actualTrim
-                    bufferLock.unlock()
-                }
+            let safeTrimPoint = unconfirmedStartSample()
+            if safeTrimPoint > snapshot.retainedRange.lowerBound {
+                pcmBuffer.discard(before: safeTrimPoint)
             }
-
         } catch {
             logger.error("Transcription pass failed: \(error, privacy: .public)")
+            recordAndPublishFailure(error)
+        }
+    }
+
+    /// Final transcription of audio after the last confirmed word.
+    private func transcribeRemainingAudio() async throws -> String? {
+        let seekSample = unconfirmedStartSample()
+        let absoluteSampleEnd = pcmBuffer.snapshot().retainedRange.upperBound
+        guard let window = try pcmBuffer.window(
+            from: seekSample,
+            through: absoluteSampleEnd,
+            maximumSamples: maximumASRWindowSamples
+        ) else { return nil }
+
+        guard window.samples.count >= minimumAudioSamples else { return nil }
+        let result = try await transcribe(paddedForASR(window.samples))
+        let text = result.text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return nil }
+        return TextNormalizer.shared.normalizeSentence(text)
+    }
+
+    private func transcribe(_ samples: [Float]) async throws -> ASRResult {
+        precondition(
+            samples.count <= maximumASRWindowSamples,
+            "FluidAudio ASR input exceeded its explicit window"
+        )
+        if let testingTranscriber {
+            return try await testingTranscriber(samples)
+        }
+        guard let asrManager else {
+            throw StreamingTranscriptionError.notConnected
+        }
+        var state = TdtDecoderState.make(decoderLayers: decoderLayerCount)
+        return try await asrManager.transcribe(
+            samples,
+            decoderState: &state,
+            language: languageHint
+        )
+    }
+
+    private func paddedForASR(_ samples: [Float]) -> [Float] {
+        guard samples.count + trailingSilenceSamples <= maximumASRWindowSamples else {
+            return samples
+        }
+        var padded = samples
+        padded.append(contentsOf: repeatElement(0, count: trailingSilenceSamples))
+        return padded
+    }
+
+    private func unconfirmedStartSample() -> Int64 {
+        let seekTime = agreementEngine.hypothesisStartTime > 0
+            ? agreementEngine.hypothesisStartTime
+            : agreementEngine.confirmedEndTime
+        return max(0, Int64(seekTime * Double(sampleRate)))
+    }
+
+    private func makeWindowExceededError(
+        _ error: SegmentedPCMBuffer.BufferError
+    ) -> StreamingTranscriptionError {
+        logger.error("FluidAudio realtime retention failed: \(String(describing: error), privacy: .public)")
+        return .transcriptionWindowExceeded(
+            maximumDuration: Double(maximumASRWindowSamples) / Double(sampleRate)
+        )
+    }
+
+    private func recordAndPublishFailure(_ error: Error) {
+        let shouldPublish: Bool
+        failureLock.lock()
+        if terminalFailure == nil {
+            terminalFailure = error
+            shouldPublish = true
+        } else {
+            shouldPublish = false
+        }
+        failureLock.unlock()
+
+        if shouldPublish {
             eventsContinuation?.yield(.error(error))
         }
     }
 
-    // Final transcription of audio after the last confirmed word.
-    private func transcribeRemainingAudio() async -> String? {
-        guard let asrManager else { return nil }
-
-        let seekTime = agreementEngine.hypothesisStartTime > 0
-            ? agreementEngine.hypothesisStartTime
-            : agreementEngine.confirmedEndTime
-        let seekSample = max(0, Int(seekTime * sampleRate))
-
-        bufferLock.lock()
-        let bufferRelativeSeek = max(0, seekSample - trimmedSampleCount)
-        guard bufferRelativeSeek < audioBuffer.count else {
-            bufferLock.unlock()
-            return nil
-        }
-        var samples = Array(audioBuffer[bufferRelativeSeek...])
-        bufferLock.unlock()
-
-        guard samples.count >= minimumAudioSamples else { return nil }
-
-        let trailingSilenceSamples = 16_000
-        let maxSingleChunkSamples = 240_000
-        if samples.count + trailingSilenceSamples <= maxSingleChunkSamples {
-            samples += [Float](repeating: 0, count: trailingSilenceSamples)
-        }
-
-        do {
-            var state = TdtDecoderState.make(decoderLayers: decoderLayerCount)
-            let result = try await asrManager.transcribe(
-                samples,
-                decoderState: &state,
-                language: languageHint
-            )
-            let text = result.text.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !text.isEmpty else { return nil }
-            return TextNormalizer.shared.normalizeSentence(text)
-        } catch {
-            logger.error("Final transcription failed: \(error, privacy: .public)")
-            return nil
+    private func throwIfFailed() throws {
+        if let failure = currentFailure() {
+            throw failure
         }
     }
 
+    private func currentFailure() -> Error? {
+        failureLock.lock()
+        defer { failureLock.unlock() }
+        return terminalFailure
+    }
+
+    private func resetFailure() {
+        failureLock.lock()
+        terminalFailure = nil
+        failureLock.unlock()
+    }
 }

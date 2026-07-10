@@ -8,7 +8,7 @@ import Speech
 
 /// Transcription service that leverages the new SpeechAnalyzer / SpeechTranscriber API available on macOS 26 (Tahoe).
 /// Falls back with an unsupported-provider error on earlier OS versions so the application can gracefully degrade.
-class NativeAppleTranscriptionService: TranscriptionService {
+actor NativeAppleTranscriptionService: TranscriptionService {
     private let logger = Logger(subsystem: "com.metrovoc.voiceink", category: "NativeAppleTranscriptionService")
     enum ServiceError: Error, LocalizedError {
         case unsupportedOS

@@ -77,7 +77,7 @@ class MenuBarManager: ObservableObject {
             } else {
                 self.logger.notice("updateAppActivationPolicy: switching to .regular (dock icon visible)")
                 application.setActivationPolicy(.regular)
-                WindowManager.shared.showMainWindow()
+                _ = WindowManager.shared.showMainWindow()
             }
         }
 

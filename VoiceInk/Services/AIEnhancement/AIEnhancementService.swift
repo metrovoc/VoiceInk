@@ -4,8 +4,22 @@ import AppKit
 import os
 import LLMkit
 
+struct AIEnhancementResponse: Sendable {
+    let text: String
+    let duration: TimeInterval
+    let promptName: String?
+    let systemMessage: String?
+    let userMessage: String?
+}
+
 @MainActor
 class AIEnhancementService: ObservableObject {
+    private struct RequestResponse {
+        let text: String
+        let systemMessage: String?
+        let userMessage: String?
+    }
+
     private let logger = Logger(subsystem: "com.metrovoc.voiceink", category: "AIEnhancementService")
 
     @Published var customPrompts: [CustomPrompt] {
@@ -23,7 +37,6 @@ class AIEnhancementService: ObservableObject {
 
     private let aiService: AIService
     private let screenCaptureService: ScreenCaptureService
-    private let customVocabularyService: CustomVocabularyService
     private var baseTimeout: TimeInterval {
         let stored = UserDefaults.standard.integer(forKey: "EnhancementTimeoutSeconds")
         return stored > 0 ? TimeInterval(stored) : 7
@@ -38,7 +51,6 @@ class AIEnhancementService: ObservableObject {
         self.aiService = aiService
         self.modelContext = modelContext
         self.screenCaptureService = ScreenCaptureService()
-        self.customVocabularyService = CustomVocabularyService.shared
 
         if let savedPromptsData = UserDefaults.standard.data(forKey: "customPrompts"),
            let decodedPrompts = try? JSONDecoder().decode([CustomPrompt].self, from: savedPromptsData) {
@@ -134,7 +146,15 @@ class AIEnhancementService: ObservableObject {
             ""
         }
 
-        let customVocabulary = customVocabularyService.getCustomVocabulary(from: modelContext)
+        // Reuse the provider-neutral detached SwiftData snapshot. Enhancement
+        // prompt construction may run while a newer recording starts, so a
+        // synchronous MainActor fetch here would still be visible as UI jank.
+        let vocabulary = await StreamingVocabularySnapshotStore.shared
+            .snapshot(for: modelContext.container)
+            .terms
+        let customVocabulary = vocabulary.isEmpty
+            ? ""
+            : "Important Vocabulary: \(vocabulary.joined(separator: ", "))"
 
         let allContextSections = selectedTextContext + clipboardContext + screenCaptureContext
 
@@ -160,7 +180,7 @@ class AIEnhancementService: ObservableObject {
         text: String,
         configuration: EnhancementRuntimeConfiguration,
         contextSnapshot: RecordingContextSnapshot?
-    ) async throws -> String {
+    ) async throws -> RequestResponse {
         guard isConfigured(for: configuration) else {
             throw EnhancementError.notConfigured
         }
@@ -175,7 +195,7 @@ class AIEnhancementService: ObservableObject {
         let modelName = configuration.modelName ?? provider.defaultModel
 
         guard !text.isEmpty else {
-            return ""
+            return RequestResponse(text: "", systemMessage: nil, userMessage: nil)
         }
 
         let formattedText = "\n<USER_MESSAGE>\n\(text)\n</USER_MESSAGE>"
@@ -185,9 +205,15 @@ class AIEnhancementService: ObservableObject {
             contextSnapshot: contextSnapshot
         )
 
-        await MainActor.run {
-            self.lastSystemMessageSent = systemMessage
-            self.lastUserMessageSent = formattedText
+        lastSystemMessageSent = systemMessage
+        lastUserMessageSent = formattedText
+
+        func response(_ text: String) -> RequestResponse {
+            RequestResponse(
+                text: text,
+                systemMessage: systemMessage,
+                userMessage: formattedText
+            )
         }
 
         if provider == .ollama {
@@ -198,7 +224,7 @@ class AIEnhancementService: ObservableObject {
                     model: modelName,
                     timeout: baseTimeout
                 )
-                return AIEnhancementOutputFilter.filter(result)
+                return response(AIEnhancementOutputFilter.filter(result))
             } catch {
                 if let localError = error as? LocalAIError {
                     switch localError {
@@ -216,7 +242,7 @@ class AIEnhancementService: ObservableObject {
         if provider == .localCLI {
             do {
                 let result = try await aiService.enhanceWithLocalCLI(systemPrompt: systemMessage, userPrompt: formattedText)
-                return AIEnhancementOutputFilter.filter(result)
+                return response(AIEnhancementOutputFilter.filter(result))
             } catch {
                 if let localError = error as? LocalCLIError {
                     throw EnhancementError.customError(localError.errorDescription ?? "An unknown Local CLI error occurred.")
@@ -278,7 +304,11 @@ class AIEnhancementService: ObservableObject {
                     timeout: baseTimeout
                 )
             }
-            return AIEnhancementOutputFilter.filter(result.trimmingCharacters(in: .whitespacesAndNewlines))
+            return response(
+                AIEnhancementOutputFilter.filter(
+                    result.trimmingCharacters(in: .whitespacesAndNewlines)
+                )
+            )
         } catch let error as LLMKitError {
             throw mapLLMKitError(error)
         } catch let error as EnhancementError {
@@ -317,7 +347,7 @@ class AIEnhancementService: ObservableObject {
         case .timeout:
             return .timeout
         case .invalidURL, .decodingError, .encodingError:
-            return .customError(error.localizedDescription ?? "An unknown error occurred.")
+            return .customError(error.localizedDescription)
         }
     }
 
@@ -331,7 +361,7 @@ class AIEnhancementService: ObservableObject {
         contextSnapshot: RecordingContextSnapshot?,
         maxRetries: Int = 3,
         initialDelay: TimeInterval = 1.0
-    ) async throws -> String {
+    ) async throws -> RequestResponse {
         var retries = 0
         var currentDelay = initialDelay
 
@@ -396,21 +426,37 @@ class AIEnhancementService: ObservableObject {
         configuration: EnhancementRuntimeConfiguration,
         contextSnapshot: RecordingContextSnapshot? = nil
     ) async throws -> (String, TimeInterval, String?) {
+        let response = try await enhanceDetailed(
+            text,
+            configuration: configuration,
+            contextSnapshot: contextSnapshot
+        )
+        return (response.text, response.duration, response.promptName)
+    }
+
+    /// Generation-owned enhancement result. Persistence callers consume the
+    /// exact request messages returned with this response instead of rereading
+    /// mutable process-wide "last request" diagnostics after an await.
+    func enhanceDetailed(
+        _ text: String,
+        configuration: EnhancementRuntimeConfiguration,
+        contextSnapshot: RecordingContextSnapshot? = nil
+    ) async throws -> AIEnhancementResponse {
         let startTime = Date()
         let promptName = configuration.prompt?.title
 
-        do {
-            let result = try await makeRequestWithRetry(
-                text: text,
-                configuration: configuration,
-                contextSnapshot: contextSnapshot
-            )
-            let endTime = Date()
-            let duration = endTime.timeIntervalSince(startTime)
-            return (result, duration, promptName)
-        } catch {
-            throw error
-        }
+        let result = try await makeRequestWithRetry(
+            text: text,
+            configuration: configuration,
+            contextSnapshot: contextSnapshot
+        )
+        return AIEnhancementResponse(
+            text: result.text,
+            duration: Date().timeIntervalSince(startTime),
+            promptName: promptName,
+            systemMessage: result.systemMessage,
+            userMessage: result.userMessage
+        )
     }
 
     func captureScreenContext() async {
@@ -418,10 +464,8 @@ class AIEnhancementService: ObservableObject {
             return
         }
 
-        if let capturedText = await screenCaptureService.captureAndExtractText() {
-            await MainActor.run {
-                self.objectWillChange.send()
-            }
+        if await screenCaptureService.captureAndExtractText() != nil {
+            objectWillChange.send()
         }
     }
 

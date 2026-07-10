@@ -6,12 +6,12 @@ import os
 /// transcribe → filter → format → word-replace → AI enhance → deliver → save
 @MainActor
 class TranscriptionPipeline {
-    struct AssistantHooks {
+    struct AssistantHooks: Sendable {
         let isFollowUp: Bool
-        let sendFollowUp: (String, Transcription) async -> Void
-        let startResponse: (String, EnhancementRuntimeConfiguration) async -> Void
-        let showResponse: (String, String?) async -> Void
-        let failResponse: (String) async -> Void
+        let sendFollowUp: @MainActor @Sendable (String, Transcription) async -> Void
+        let startResponse: @MainActor @Sendable (String, EnhancementRuntimeConfiguration) async -> Void
+        let showResponse: @MainActor @Sendable (String, String?) async -> Void
+        let failResponse: @MainActor @Sendable (String) async -> Void
 
         static let inactive = AssistantHooks(
             isFollowUp: false,
@@ -25,7 +25,6 @@ class TranscriptionPipeline {
     private let modelContext: ModelContext
     private let serviceRegistry: TranscriptionServiceRegistry
     private let enhancementService: AIEnhancementService?
-    private let promptDetectionService = PromptDetectionService()
     private let delivery = TranscriptionDelivery()
     private let logger = Logger(subsystem: "com.metrovoc.voiceink", category: "TranscriptionPipeline")
 
@@ -62,7 +61,9 @@ class TranscriptionPipeline {
         shouldCancel: () -> Bool,
         onCancel: @escaping () async -> Void,
         onDismiss: @escaping () async -> Void,
-        assistant: AssistantHooks = .inactive
+        assistant: AssistantHooks = .inactive,
+        performanceTrace: RealtimePerformanceTrace? = nil,
+        wasPersistedPending: Bool = false
     ) async {
         let model = transcriptionConfiguration.model
         var finalText: String?
@@ -88,7 +89,14 @@ class TranscriptionPipeline {
             )
 
             do {
+                if !wasPersistedPending {
+                    modelContext.insert(transcription)
+                }
                 try modelContext.save()
+                if !wasPersistedPending {
+                    NotificationCenter.default.post(name: .transcriptionCreated, object: transcription)
+                }
+                NotificationCenter.default.post(name: .transcriptionCompleted, object: transcription)
             } catch {
                 logger.error("Failed to save canceled transcription: \(error, privacy: .public)")
             }
@@ -111,26 +119,26 @@ class TranscriptionPipeline {
                     context: transcriptionConfiguration.requestContext
                 )
             }
-            text = TranscriptionOutputFilter.filter(text)
+            performanceTrace?.mark(.finalReceived)
             let transcriptionDuration = Date().timeIntervalSince(transcriptionStart)
 
             if shouldCancel() { await finishCanceledTranscription(); return }
 
-            text = text.trimmingCharacters(in: .whitespacesAndNewlines)
             let formattingConfiguration = resolveFormattingConfiguration()
-
-            if formattingConfiguration.isTextFormattingEnabled {
-                text = ParagraphFormatter.format(text)
-            }
-
-            text = WordReplacementService.shared.applyReplacements(to: text, using: modelContext)
-            text = TextTransformService.shared.applyRules(to: text, using: modelContext)
-
-            let cleanedText = TranscriptionOutputFilter.applyCleanupPreferences(
-                text,
+            let processingInput = TranscriptionTextProcessingInput(
+                text: text,
+                fillerWords: FillerWordManager.shared.fillerWords,
+                formatsParagraphs: formattingConfiguration.isTextFormattingEnabled,
+                wordReplacements: WordReplacementService.shared.enabledRules(using: modelContext),
+                textRules: TextTransformService.shared.enabledRules(using: modelContext),
                 punctuationMode: formattingConfiguration.punctuationCleanupMode,
-                shouldLowercase: formattingConfiguration.lowercaseTranscription
+                lowercasesText: formattingConfiguration.lowercaseTranscription
             )
+            let processingResult = await Task.detached(priority: .userInitiated) {
+                TranscriptionTextProcessor.process(processingInput)
+            }.value
+            text = processingResult.transformedText
+            let cleanedText = processingResult.cleanedText
 
             let actualDuration = await AudioFileMetadata.duration(for: audioURL)
             let modeMetadata = transcriptionConfiguration.metadata
@@ -149,10 +157,19 @@ class TranscriptionPipeline {
 
                 if let enhancementService,
                    let currentConfiguration = resolvedEnhancementConfiguration,
-                   currentConfiguration.provider != nil,
-                   let detection = promptDetectionService.detectPrompt(in: text, prompts: enhancementService.allPrompts) {
-                    resolvedEnhancementConfiguration = currentConfiguration.replacingPrompt(detection.prompt)
-                    promptDetection = detection
+                   currentConfiguration.provider != nil {
+                    let prompts = enhancementService.allPrompts
+                    let textForDetection = text
+                    let detection = await Task.detached(priority: .utility) { @Sendable in
+                        PromptDetectionService().detectPrompt(
+                            in: textForDetection,
+                            prompts: prompts
+                        )
+                    }.value
+                    if let detection {
+                        resolvedEnhancementConfiguration = currentConfiguration.replacingPrompt(detection.prompt)
+                        promptDetection = detection
+                    }
                 }
 
                 let resolvedOutputConfiguration = outputConfiguration()
@@ -169,7 +186,7 @@ class TranscriptionPipeline {
                 let shortEnhancementWordThreshold = savedThreshold > 0 ? savedThreshold : 3
                 let shouldSkipEnhancement = !shouldRespondInRecorder &&
                     isSkipShortEnhancementEnabled &&
-                    WordCounter.count(in: text) <= shortEnhancementWordThreshold &&
+                    processingResult.wordCount <= shortEnhancementWordThreshold &&
                     promptDetection == nil
 
                 if let enhancementService,
@@ -187,18 +204,18 @@ class TranscriptionPipeline {
 
                     do {
                         let contextSnapshot = await recordingContextSnapshot()
-                        let (enhancedText, enhancementDuration, promptName) = try await enhancementService.enhance(
+                        let enhancement = try await enhancementService.enhanceDetailed(
                             textForAI,
                             configuration: resolvedEnhancementConfiguration,
                             contextSnapshot: contextSnapshot
                         )
-                        transcription.enhancedText = enhancedText
+                        transcription.enhancedText = enhancement.text
                         transcription.aiEnhancementModelName = resolvedEnhancementConfiguration.modelName ?? resolvedEnhancementConfiguration.provider?.defaultModel
-                        transcription.promptName = promptName
-                        transcription.enhancementDuration = enhancementDuration
-                        transcription.aiRequestSystemMessage = enhancementService.lastSystemMessageSent
-                        transcription.aiRequestUserMessage = enhancementService.lastUserMessageSent
-                        finalText = enhancedText
+                        transcription.promptName = enhancement.promptName
+                        transcription.enhancementDuration = enhancement.duration
+                        transcription.aiRequestSystemMessage = enhancement.systemMessage
+                        transcription.aiRequestUserMessage = enhancement.userMessage
+                        finalText = enhancement.text
                     } catch {
                         let errorDescription = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
                         transcription.enhancedText = String(format: String(localized: "Enhancement failed: %@"), errorDescription)
@@ -234,13 +251,38 @@ class TranscriptionPipeline {
             transcription.transcriptionStatus = TranscriptionStatus.failed.rawValue
         }
 
+        let metricWordCount: Int?
+        if transcription.transcriptionStatus == TranscriptionStatus.completed.rawValue {
+            let metricText: String
+            if let enhancedText = transcription.enhancedText,
+               transcription.enhancementDuration != nil,
+               !enhancedText.isEmpty {
+                metricText = enhancedText
+            } else {
+                metricText = transcription.text
+            }
+            metricWordCount = await Task.detached(priority: .utility) {
+                WordCounter.count(in: metricText)
+            }.value
+        } else {
+            metricWordCount = nil
+        }
+
         func saveTranscriptionAndPostCompletion() {
+            // Persistence is deliberately ordered after provider finalization and
+            // delivery. SwiftData work must never delay realtime commit or the
+            // user's paste command.
+            if !wasPersistedPending {
+                modelContext.insert(transcription)
+            }
+
             if transcription.transcriptionStatus == TranscriptionStatus.completed.rawValue {
                 do {
                     didInsertSessionMetric = try SessionMetricRecorder.recordRecorderSession(
                         transcription: transcription,
                         model: model,
-                        in: modelContext
+                        in: modelContext,
+                        wordCount: metricWordCount
                     )
                 } catch {
                     logger.error("Failed to record session metric: \(error, privacy: .public)")
@@ -249,6 +291,9 @@ class TranscriptionPipeline {
 
             do {
                 try modelContext.save()
+                if !wasPersistedPending {
+                    NotificationCenter.default.post(name: .transcriptionCreated, object: transcription)
+                }
                 if didInsertSessionMetric {
                     NotificationCenter.default.post(name: .sessionMetricsDidChange, object: nil)
                 }
@@ -280,6 +325,7 @@ class TranscriptionPipeline {
                 failResponse: assistant.failResponse
             )
         )
+        performanceTrace?.mark(.delivered)
 
         saveTranscriptionAndPostCompletion()
     }

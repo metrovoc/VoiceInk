@@ -1,7 +1,7 @@
 import Foundation
 
 // Enum to differentiate between model providers
-enum ModelProvider: String, Codable, Hashable, CaseIterable {
+enum ModelProvider: String, Codable, Hashable, CaseIterable, Sendable {
     case whisper = "Whisper"
     case fluidAudio = "Parakeet"
     case groq = "Groq"
@@ -33,7 +33,7 @@ enum ModelProvider: String, Codable, Hashable, CaseIterable {
 }
 
 // A unified protocol for any transcription model
-protocol TranscriptionModel: Identifiable, Hashable {
+protocol TranscriptionModel: Identifiable, Hashable, Sendable {
     var id: UUID { get }
     var name: String { get }
     var displayName: String { get }

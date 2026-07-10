@@ -287,7 +287,7 @@ struct AudioVisualizerMeterState: Equatable {
 
     private mutating func updateEnvelope(target: Double, elapsed: TimeInterval) {
         let referenceInterval = max(0.001, profile.referenceFrameInterval)
-        let stepCount = max(1, elapsed / referenceInterval)
+        let stepCount = max(0.001, elapsed / referenceInterval)
         let perFrameCoefficient = target > envelope
             ? profile.attackCoefficient
             : profile.releaseCoefficient
@@ -306,7 +306,7 @@ struct AudioVisualizerMeterState: Equatable {
 
     private func elapsedAdjustedCoefficient(_ perFrameCoefficient: Double, elapsed: TimeInterval) -> Double {
         let referenceInterval = max(0.001, profile.referenceFrameInterval)
-        let stepCount = max(1, elapsed / referenceInterval)
+        let stepCount = max(0.001, elapsed / referenceInterval)
         return 1 - pow(1 - perFrameCoefficient, stepCount)
     }
 
@@ -344,16 +344,47 @@ struct AudioVisualizerMeterState: Equatable {
     }
 }
 
-private final class AudioVisualizerMeterStore {
-    var state = AudioVisualizerMeterState()
+final class AudioVisualizerMeterStore {
+    private(set) var state = AudioVisualizerMeterState()
+    private(set) var visualMeter = AudioVisualizerMeterSnapshot.silent
+    private var lastSampleSequence: UInt64?
 
     func reset() {
         state = AudioVisualizerMeterState()
+        visualMeter = .silent
+        lastSampleSequence = nil
+    }
+
+    func snapshot(
+        from source: AudioMeterSource,
+        isActive: Bool,
+        at time: TimeInterval
+    ) -> AudioVisualizerMeterSnapshot {
+        guard isActive else {
+            reset()
+            return .silent
+        }
+
+        let sample = source.snapshot()
+        guard sample.sequence != lastSampleSequence else {
+            return visualMeter
+        }
+
+        lastSampleSequence = sample.sequence
+        let nextVisualMeter = state.update(
+            averageDb: sample.meter.averagePower,
+            peakDb: sample.meter.peakPower,
+            at: time
+        )
+        if nextVisualMeter != visualMeter {
+            visualMeter = nextVisualMeter
+        }
+        return visualMeter
     }
 }
 
 struct AudioVisualizer: View {
-    let audioMeter: AudioMeter
+    let audioMeterSource: AudioMeterSource
     let color: Color
     let isActive: Bool
 
@@ -365,49 +396,48 @@ struct AudioVisualizer: View {
 
     private let barWeights: [CGFloat]
     @State private var meterStore = AudioVisualizerMeterStore()
-    @State private var visualMeter = AudioVisualizerMeterSnapshot.silent
 
-    init(audioMeter: AudioMeter, color: Color, isActive: Bool) {
-        self.audioMeter = audioMeter
+    init(audioMeterSource: AudioMeterSource, color: Color, isActive: Bool) {
+        self.audioMeterSource = audioMeterSource
         self.color = color
         self.isActive = isActive
         self.barWeights = Self.makeBarWeights(count: barCount)
     }
 
     var body: some View {
-        Group {
-            if visualMeter.motionAmount > 0.01 {
-                TimelineView(.animation(minimumInterval: AudioVisualizerBarModel.animationInterval)) { context in
-                    bars(time: context.date.timeIntervalSinceReferenceDate)
-                }
-            } else {
-                bars(time: nil)
-            }
+        TimelineView(.animation(minimumInterval: AudioMeterCadence.interval)) { context in
+            let time = context.date.timeIntervalSinceReferenceDate
+            let visualMeter = meterStore.snapshot(
+                from: audioMeterSource,
+                isActive: isActive,
+                at: time
+            )
+            bars(visualMeter: visualMeter, time: visualMeter.motionAmount > 0.01 ? time : nil)
         }
-        .onAppear(perform: updateVisualMeter)
-        .onChange(of: audioMeter) {
-            updateVisualMeter()
-        }
-        .onChange(of: isActive) {
-            if !isActive {
-                meterStore.reset()
-                visualMeter = .silent
-            }
-        }
-        .animation(.easeOut(duration: 0.10), value: visualMeter)
+        .onDisappear(perform: meterStore.reset)
     }
 
-    private func bars(time: TimeInterval?) -> some View {
+    private func bars(
+        visualMeter: AudioVisualizerMeterSnapshot,
+        time: TimeInterval?
+    ) -> some View {
         HStack(spacing: barSpacing) {
             ForEach(0..<barCount, id: \.self) { index in
                 RoundedRectangle(cornerRadius: barWidth / 2)
                     .fill(color.opacity(0.85))
-                    .frame(width: barWidth, height: barHeight(for: index, time: time))
+                    .frame(
+                        width: barWidth,
+                        height: barHeight(for: index, visualMeter: visualMeter, time: time)
+                    )
             }
         }
     }
 
-    private func barHeight(for index: Int, time: TimeInterval?) -> CGFloat {
+    private func barHeight(
+        for index: Int,
+        visualMeter: AudioVisualizerMeterSnapshot,
+        time: TimeInterval?
+    ) -> CGFloat {
         AudioVisualizerBarModel.barHeight(
             for: index,
             weights: barWeights,
@@ -418,22 +448,6 @@ struct AudioVisualizer: View {
             maxHeight: maxHeight,
             time: time
         )
-    }
-
-    private func updateVisualMeter() {
-        guard isActive else {
-            meterStore.reset()
-            visualMeter = .silent
-            return
-        }
-        let nextVisualMeter = meterStore.state.update(
-            averageDb: audioMeter.averagePower,
-            peakDb: audioMeter.peakPower,
-            at: ProcessInfo.processInfo.systemUptime
-        )
-        if nextVisualMeter != visualMeter {
-            visualMeter = nextVisualMeter
-        }
     }
 
     private static func makeBarWeights(count: Int) -> [CGFloat] {

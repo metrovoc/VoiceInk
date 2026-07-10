@@ -3,17 +3,17 @@ import Foundation
 import os
 
 /// True streaming provider backed by FluidAudio's Parakeet Unified manager.
-final class FluidAudioUnifiedStreamingProvider: StreamingTranscriptionProvider {
+final class FluidAudioUnifiedStreamingProvider: StreamingTranscriptionProvider, @unchecked Sendable {
     private let logger = Logger(subsystem: "com.metrovoc.voiceink", category: "FluidAudioUnifiedStreaming")
     private var manager: StreamingUnifiedAsrManager?
-    private var eventsContinuation: AsyncStream<StreamingTranscriptionEvent>.Continuation?
+    private var eventsContinuation: StreamingProviderEventRelay?
 
     private(set) var transcriptionEvents: AsyncStream<StreamingTranscriptionEvent>
 
     init() {
-        var continuation: AsyncStream<StreamingTranscriptionEvent>.Continuation!
-        transcriptionEvents = AsyncStream { continuation = $0 }
-        eventsContinuation = continuation
+        let relay = StreamingProviderEventRelay()
+        transcriptionEvents = relay.stream
+        eventsContinuation = relay
     }
 
     deinit {
@@ -58,6 +58,7 @@ final class FluidAudioUnifiedStreamingProvider: StreamingTranscriptionProvider {
         let text = finalText.trimmingCharacters(in: .whitespacesAndNewlines)
         let normalized = TextNormalizer.shared.normalizeSentence(text)
         eventsContinuation?.yield(.committed(text: normalized))
+        eventsContinuation?.yield(.finalized)
     }
 
     func disconnect() async {

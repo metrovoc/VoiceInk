@@ -55,7 +55,10 @@ struct VoiceInkApp: App {
         let resolvedContainer: ModelContainer
 
         #if DEBUG
-        let forceInMemoryStore = ProcessInfo.processInfo.environment["VOICEINK_DEBUG_IN_MEMORY_STORE"] == "1"
+        let environment = ProcessInfo.processInfo.environment
+        let forceInMemoryStore = environment["VOICEINK_DEBUG_IN_MEMORY_STORE"] == "1"
+            || environment["XCTestConfigurationFilePath"] != nil
+            || NSClassFromString("XCTestCase") != nil
         #else
         let forceInMemoryStore = false
         #endif
@@ -164,7 +167,7 @@ struct VoiceInkApp: App {
         let prewarmService = ModelPrewarmService(
             transcriptionModelManager: transcriptionModelManager,
             whisperModelManager: whisperModelManager,
-            modelContext: resolvedContainer.mainContext
+            serviceRegistry: engine.serviceRegistry
         )
         _prewarmService = StateObject(wrappedValue: prewarmService)
 
@@ -349,7 +352,6 @@ struct VoiceInkApp: App {
                         })
                         .onDisappear {
                             AnnouncementsService.shared.stop()
-                            whisperModelManager.unloadModel()
 
                             // Stop the automatic audio cleanup process
                             audioCleanupManager.stopAutomaticCleanup()

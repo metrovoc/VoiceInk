@@ -6,9 +6,12 @@ import os
 class TranscriptionModelManager: ObservableObject {
     @Published var currentTranscriptionModel: (any TranscriptionModel)?
     @Published var allAvailableModels: [any TranscriptionModel] = TranscriptionModelRegistry.models
+    @Published private(set) var usableModels: [any TranscriptionModel] = []
 
     private weak var whisperModelManager: WhisperModelManager?
     private weak var fluidAudioModelManager: FluidAudioModelManager?
+    private var usableModelsByName: [String: any TranscriptionModel] = [:]
+    private var apiKeyObserver: NSObjectProtocol?
 
     private let logger = Logger(subsystem: "com.metrovoc.voiceink", category: "TranscriptionModelManager")
 
@@ -31,12 +34,37 @@ class TranscriptionModelManager: ObservableObject {
         fluidAudioModelManager.onModelsChanged = { [weak self] in
             self?.refreshAllAvailableModels()
         }
+
+        apiKeyObserver = NotificationCenter.default.addObserver(
+            forName: .aiProviderKeyChanged,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in
+                self?.refreshUsableModels()
+            }
+        }
+
+        refreshUsableModels()
     }
 
-    // MARK: - Computed: usable models
+    deinit {
+        if let apiKeyObserver {
+            NotificationCenter.default.removeObserver(apiKeyObserver)
+        }
+    }
 
-    var usableModels: [any TranscriptionModel] {
-        allAvailableModels.filter { model in
+    // MARK: - Cached usable models
+
+    /// Returns a precomputed availability snapshot. Availability checks can touch the
+    /// filesystem or secure storage, so they must never be repeated in the recording
+    /// hot path merely to resolve one already-selected model.
+    func usableModel(named name: String) -> (any TranscriptionModel)? {
+        usableModelsByName[name]
+    }
+
+    private func refreshUsableModels() {
+        let models = allAvailableModels.filter { model in
             switch model.provider {
             case .whisper:
                 return whisperModelManager?.availableModels.contains { $0.name == model.name } ?? false
@@ -53,6 +81,15 @@ class TranscriptionModelManager: ObservableObject {
                 return false
             }
         }
+
+        // Preserve the registry's first-match semantics without assuming custom
+        // or imported models can never reuse a provider model name.
+        usableModelsByName = models.reduce(into: [:]) { result, model in
+            if result[model.name] == nil {
+                result[model.name] = model
+            }
+        }
+        usableModels = models
     }
 
     func isAvailableOnCurrentOS(_ model: any TranscriptionModel) -> Bool {
@@ -96,8 +133,7 @@ class TranscriptionModelManager: ObservableObject {
         ensureSelectedLanguageIsSupported(by: model)
 
         if model.provider != .whisper {
-            whisperModelManager?.loadedWhisperModel = nil
-            whisperModelManager?.isModelLoaded = true
+            whisperModelManager?.unloadModel()
         }
 
         NotificationCenter.default.post(name: .didChangeModel, object: nil, userInfo: ["modelName": model.name])
@@ -128,6 +164,7 @@ class TranscriptionModelManager: ObservableObject {
         }
 
         allAvailableModels = models
+        refreshUsableModels()
 
         if let currentName = currentModelName,
            let updatedModel = allAvailableModels.first(where: { $0.name == currentName }) {
@@ -149,8 +186,7 @@ class TranscriptionModelManager: ObservableObject {
         if currentTranscriptionModel?.name == modelName {
             currentTranscriptionModel = nil
             UserDefaults.standard.removeObject(forKey: "CurrentTranscriptionModel")
-            whisperModelManager?.loadedWhisperModel = nil
-            whisperModelManager?.isModelLoaded = false
+            whisperModelManager?.unloadModel()
             UserDefaults.standard.removeObject(forKey: "CurrentModel")
         }
         refreshAllAvailableModels()

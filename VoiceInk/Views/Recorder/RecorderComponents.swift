@@ -212,8 +212,7 @@ struct ProgressAnimation: View {
     private let dotSize: CGFloat = 3
     private let dotSpacing: CGFloat = 2
 
-    @State private var currentDot = 0
-    @State private var timer: Timer?
+    @State private var startedAt = Date()
 
     init(color: Color = .white, animationSpeed: Double = 0.3) {
         self.color = color
@@ -221,26 +220,26 @@ struct ProgressAnimation: View {
     }
 
     var body: some View {
-        HStack(spacing: dotSpacing) {
-            ForEach(0..<dotCount, id: \.self) { index in
-                RoundedRectangle(cornerRadius: dotSize / 2)
-                    .fill(color.opacity(index <= currentDot ? 0.85 : 0.25))
-                    .frame(width: dotSize, height: dotSize)
+        TimelineView(
+            .periodic(from: startedAt, by: max(0.05, animationSpeed))
+        ) { context in
+            let tick = Int(
+                max(0, context.date.timeIntervalSince(startedAt))
+                    / max(0.05, animationSpeed)
+            )
+            let phase = tick % (dotCount + 2)
+            let currentDot = phase > dotCount ? -1 : phase
+
+            HStack(spacing: dotSpacing) {
+                ForEach(0..<dotCount, id: \.self) { index in
+                    RoundedRectangle(cornerRadius: dotSize / 2)
+                        .fill(color.opacity(index <= currentDot ? 0.85 : 0.25))
+                        .frame(width: dotSize, height: dotSize)
+                }
             }
         }
-        .onAppear { startAnimation() }
-        .onDisappear {
-            timer?.invalidate()
-            timer = nil
-        }
-    }
-
-    private func startAnimation() {
-        timer?.invalidate()
-        currentDot = 0
-        timer = Timer.scheduledTimer(withTimeInterval: animationSpeed, repeats: true) { _ in
-            currentDot = (currentDot + 1) % (dotCount + 2)
-            if currentDot > dotCount { currentDot = -1 }
+        .onAppear {
+            startedAt = Date()
         }
     }
 }
@@ -304,19 +303,10 @@ struct RecorderModeButton: View {
 // MARK: - Live Transcript View
 
 struct LiveTranscriptView: View {
-    let text: String
+    let model: LiveTranscriptPresentationModel
 
     var body: some View {
-        ScrollViewReader { proxy in
-            ScrollView(.vertical, showsIndicators: false) {
-                Text(text)
-                    .font(.system(size: 12))
-                    .foregroundColor(.white.opacity(0.8))
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 6)
-                    .id("bottom")
-            }
+        LiveTranscriptTextSurface(model: model)
             .frame(height: 56)
             .mask(
                 LinearGradient(
@@ -329,11 +319,6 @@ struct LiveTranscriptView: View {
                     endPoint: .bottom
                 )
             )
-            .onChange(of: text) {
-                proxy.scrollTo("bottom", anchor: .bottom)
-            }
-        }
-        .transaction { $0.disablesAnimations = true }
     }
 }
 
@@ -341,19 +326,23 @@ struct LiveTranscriptView: View {
 
 struct RecorderStatusDisplay: View {
     let currentState: RecordingState
-    @ObservedObject var recorder: Recorder
+    let audioMeterSource: AudioMeterSource
     let menuBarHeight: CGFloat?
 
-    init(currentState: RecordingState, recorder: Recorder, menuBarHeight: CGFloat? = nil) {
+    init(
+        currentState: RecordingState,
+        audioMeterSource: AudioMeterSource,
+        menuBarHeight: CGFloat? = nil
+    ) {
         self.currentState = currentState
-        self.recorder = recorder
+        self.audioMeterSource = audioMeterSource
         self.menuBarHeight = menuBarHeight
     }
 
     var body: some View {
         Group {
             if currentState == .starting || currentState == .recording {
-                AudioVisualizer(audioMeter: recorder.audioMeter, color: .white, isActive: true)
+                AudioVisualizer(audioMeterSource: audioMeterSource, color: .white, isActive: true)
                     .scaleEffect(y: menuBarHeight != nil ? min(1.0, (menuBarHeight! - 8) / 25) : 1.0, anchor: .center)
                     .transition(.opacity)
             } else if currentState == .enhancing {
@@ -374,7 +363,7 @@ struct RecorderStatusDisplay: View {
 
 struct AssistantPanelView: View {
     @ObservedObject var session: AssistantSession
-    let liveFollowUpText: String
+    let liveTranscript: LiveTranscriptPresentationModel?
     let onSend: (String) -> Void
 
     @State private var draftMessage = ""
@@ -454,13 +443,11 @@ struct AssistantPanelView: View {
     private var followUpRow: some View {
         HStack(spacing: 8) {
             ZStack(alignment: .leading) {
-                if shouldShowLiveFollowUpText {
-                    Text(liveFollowUpText)
-                        .font(.system(size: 12))
-                        .foregroundStyle(followUpTextColor)
-                        .lineLimit(1)
-                        .truncationMode(.head)
-                        .allowsHitTesting(false)
+                if draftMessage.isEmpty, let liveTranscript {
+                    AssistantLiveTranscriptPlaceholder(
+                        model: liveTranscript,
+                        color: followUpTextColor
+                    )
                 }
 
                 TextField("", text: $draftMessage)
@@ -492,11 +479,6 @@ struct AssistantPanelView: View {
         }
     }
 
-    private var shouldShowLiveFollowUpText: Bool {
-        draftMessage.isEmpty &&
-            !liveFollowUpText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-    }
-
     private var canSendDraft: Bool {
         session.canSendFollowUp &&
             !draftMessage.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -526,6 +508,22 @@ struct AssistantPanelView: View {
                     proxy.scrollTo("status", anchor: .bottom)
                 }
             }
+        }
+    }
+}
+
+private struct AssistantLiveTranscriptPlaceholder: View {
+    @ObservedObject var model: LiveTranscriptPresentationModel
+    let color: Color
+
+    var body: some View {
+        if !model.previewText.isEmpty {
+            Text(model.previewText)
+                .font(.system(size: 12))
+                .foregroundStyle(color)
+                .lineLimit(1)
+                .truncationMode(.head)
+                .allowsHitTesting(false)
         }
     }
 }

@@ -1,22 +1,21 @@
 import Foundation
-import SwiftData
 import LLMkit
 
 /// AssemblyAI streaming provider wrapping `LLMkit.AssemblyAIStreamingClient`.
-final class AssemblyAIStreamingProvider: StreamingTranscriptionProvider {
+final class AssemblyAIStreamingProvider: StreamingTranscriptionProvider, @unchecked Sendable {
 
     private let client = LLMkit.AssemblyAIStreamingClient()
-    private var eventsContinuation: AsyncStream<StreamingTranscriptionEvent>.Continuation?
+    private var eventsContinuation: StreamingProviderEventRelay?
     private var forwardingTask: Task<Void, Never>?
-    private let modelContext: ModelContext
+    private let customVocabulary: [String]
 
     private(set) var transcriptionEvents: AsyncStream<StreamingTranscriptionEvent>
 
-    init(modelContext: ModelContext) {
-        self.modelContext = modelContext
-        var continuation: AsyncStream<StreamingTranscriptionEvent>.Continuation!
-        transcriptionEvents = AsyncStream { continuation = $0 }
-        eventsContinuation = continuation
+    init(customVocabulary: [String]) {
+        self.customVocabulary = customVocabulary
+        let relay = StreamingProviderEventRelay()
+        transcriptionEvents = relay.stream
+        eventsContinuation = relay
     }
 
     deinit {
@@ -38,7 +37,7 @@ final class AssemblyAIStreamingProvider: StreamingTranscriptionProvider {
                 model: model.name,
                 language: language,
                 prompt: transcriptionPrompt(),
-                customVocabulary: getCustomDictionaryTerms()
+                customVocabulary: customVocabulary
             )
         } catch {
             forwardingTask?.cancel()
@@ -83,6 +82,8 @@ final class AssemblyAIStreamingProvider: StreamingTranscriptionProvider {
                     self.eventsContinuation?.yield(.partial(text: text))
                 case .committed(let text):
                     self.eventsContinuation?.yield(.committed(text: text))
+                case .finalized:
+                    self.eventsContinuation?.yield(.finalized)
                 case .error(let message):
                     self.eventsContinuation?.yield(.error(StreamingTranscriptionError.serverError(message)))
                 }
@@ -93,25 +94,6 @@ final class AssemblyAIStreamingProvider: StreamingTranscriptionProvider {
     private func transcriptionPrompt() -> String? {
         let prompt = UserDefaults.standard.string(forKey: "TranscriptionPrompt") ?? ""
         return prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : prompt
-    }
-
-    private func getCustomDictionaryTerms() -> [String] {
-        let descriptor = FetchDescriptor<VocabularyWord>(sortBy: [SortDescriptor(\.word)])
-        guard let vocabularyWords = try? modelContext.fetch(descriptor) else {
-            return []
-        }
-        var seen = Set<String>()
-        var unique: [String] = []
-        for word in vocabularyWords {
-            let trimmed = word.word.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !trimmed.isEmpty else { continue }
-            let key = trimmed.lowercased()
-            if !seen.contains(key) {
-                seen.insert(key)
-                unique.append(trimmed)
-            }
-        }
-        return unique
     }
 
     private func mapError(_ error: Error) -> Error {
@@ -126,7 +108,7 @@ final class AssemblyAIStreamingProvider: StreamingTranscriptionProvider {
         case .timeout:
             return StreamingTranscriptionError.timeout
         default:
-            return StreamingTranscriptionError.serverError(llmError.localizedDescription ?? "Unknown error")
+            return StreamingTranscriptionError.serverError(llmError.localizedDescription)
         }
     }
 }

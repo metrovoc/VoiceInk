@@ -29,6 +29,8 @@ enum RecorderPanelStyle: String, CaseIterable, Identifiable {
 @MainActor
 protocol RecorderPanelPresenting: AnyObject {
     var isRecorderPanelVisible: Bool { get }
+    func applyLiveTranscript(_ snapshot: StreamingTranscriptSnapshot)
+    func clearLiveTranscript()
     func dismissRecorderPanel() async
 }
 
@@ -68,6 +70,7 @@ class RecorderUIManager: ObservableObject, RecorderPanelPresenting {
 
     private weak var engine: VoiceInkEngine?
     private var recorder: Recorder?
+    private var presentationModel: RecorderPresentationModel?
 
     private let logger = Logger(subsystem: "com.metrovoc.voiceink", category: "RecorderUIManager")
     #if DEBUG
@@ -80,6 +83,7 @@ class RecorderUIManager: ObservableObject, RecorderPanelPresenting {
     func configure(engine: VoiceInkEngine, recorder: Recorder) {
         self.engine = engine
         self.recorder = recorder
+        presentationModel = RecorderPresentationModel(engine: engine)
         setupNotifications()
         prepareRecorderPanel()
     }
@@ -113,8 +117,11 @@ class RecorderUIManager: ObservableObject, RecorderPanelPresenting {
             return notchWindowManager
         }
 
+        guard let presentationModel else {
+            preconditionFailure("RecorderUIManager must be configured before creating a panel")
+        }
         let manager = NotchWindowManager(
-            engine: engine,
+            presentation: presentationModel,
             recorder: recorder,
             assistantSession: engine.assistantSession,
             onRecordButtonTapped: { [weak self] in
@@ -142,8 +149,11 @@ class RecorderUIManager: ObservableObject, RecorderPanelPresenting {
             return miniWindowManager
         }
 
+        guard let presentationModel else {
+            preconditionFailure("RecorderUIManager must be configured before creating a panel")
+        }
         let manager = MiniWindowManager(
-            engine: engine,
+            presentation: presentationModel,
             recorder: recorder,
             assistantSession: engine.assistantSession,
             onRecordButtonTapped: { [weak self] in
@@ -240,6 +250,14 @@ class RecorderUIManager: ObservableObject, RecorderPanelPresenting {
         hideRecorderPanel()
         isRecorderPanelVisible = false
         engine.assistantSession.reset()
+    }
+
+    func applyLiveTranscript(_ snapshot: StreamingTranscriptSnapshot) {
+        presentationModel?.applyLiveTranscript(snapshot)
+    }
+
+    func clearLiveTranscript() {
+        presentationModel?.clearLiveTranscript()
     }
 
     func resetOnLaunch() async {

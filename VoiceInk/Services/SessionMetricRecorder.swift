@@ -11,6 +11,7 @@ enum SessionMetricRecorder {
         transcription: Transcription,
         model: (any TranscriptionModel)?,
         in modelContext: ModelContext,
+        wordCount precomputedWordCount: Int? = nil,
         timestamp: Date = Date()
     ) throws -> Bool {
         guard transcription.transcriptionStatus == TranscriptionStatus.completed.rawValue else {
@@ -29,7 +30,7 @@ enum SessionMetricRecorder {
         }
 
         let textForCounting = finalTextForCounting(from: transcription)
-        let wordCount = WordCounter.count(in: textForCounting)
+        let wordCount = precomputedWordCount ?? WordCounter.count(in: textForCounting)
         let audioDuration = max(transcription.duration, 0)
         let transcriptionDuration = transcription.transcriptionDuration.flatMap { $0 > 0 ? $0 : nil }
         let speedFactor = transcriptionDuration.flatMap { duration in

@@ -9,7 +9,7 @@ class MiniWindowManager {
     private let makeView: () -> AnyView
 
     init(
-        engine: VoiceInkEngine,
+        presentation: RecorderPresentationModel,
         recorder: Recorder,
         assistantSession: AssistantSession,
         onRecordButtonTapped: @escaping () -> Void,
@@ -19,8 +19,8 @@ class MiniWindowManager {
         self.makeView = {
             AnyView(
                 MiniRecorderView(
-                    stateProvider: engine,
-                    recorder: recorder,
+                    presentation: presentation,
+                    audioMeterSource: recorder.audioMeterSource,
                     assistantSession: assistantSession,
                     onRecordButtonTapped: onRecordButtonTapped,
                     onCloseTapped: onCloseTapped,

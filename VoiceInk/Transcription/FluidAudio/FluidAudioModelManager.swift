@@ -27,7 +27,7 @@ class FluidAudioModelManager: ObservableObject {
     private let logger = Logger(subsystem: "com.metrovoc.voiceink", category: "FluidAudioModelManager")
 
     // Add new Fluid Audio models here when support is added.
-    private static let modelVersionMap: [String: AsrModelVersion] = [
+    nonisolated private static let modelVersionMap: [String: AsrModelVersion] = [
         "parakeet-tdt-0.6b-v2": .v2,
         "parakeet-tdt-0.6b-v3": .v3,
     ]

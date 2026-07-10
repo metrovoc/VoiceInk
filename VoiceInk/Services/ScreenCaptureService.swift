@@ -4,20 +4,17 @@ import Vision
 import ScreenCaptureKit
 import ApplicationServices
 
+private enum ScreenCaptureGeometry {
+    static let maximumDimension: CGFloat = 2800
+    static let focusedWindowFrameTolerance: CGFloat = 96
+}
+
 @MainActor
 class ScreenCaptureService: ObservableObject {
     @Published var isCapturing = false
     @Published var lastCapturedText: String?
 
-    private struct FocusedWindowHint: Sendable {
-        let processID: pid_t
-        let title: String?
-        let frame: CGRect?
-    }
-
     private static let captureTimeout: TimeInterval = 3.0
-    private static let maximumCaptureDimension: CGFloat = 2800
-    private static let focusedWindowFrameTolerance: CGFloat = 96
 
     static func requestScreenCapturePermissionRegistration() async -> Bool {
         if CGPreflightScreenCaptureAccess() {
@@ -48,12 +45,11 @@ class ScreenCaptureService: ObservableObject {
         let currentPID = ProcessInfo.processInfo.processIdentifier
         let focusedWindowHint = makeFocusedWindowHint(excluding: currentPID)
 
-        guard let contextText = await Self.withTimeout(seconds: Self.captureTimeout, operation: {
-            await Self.captureAndExtractWindowText(
+        guard let focusedWindowHint,
+              let contextText = await Self.captureAndExtractText(
                 focusedWindowHint: focusedWindowHint,
                 currentPID: currentPID
-            )
-        }) else {
+              ) else {
             return nil
         }
 
@@ -61,39 +57,44 @@ class ScreenCaptureService: ObservableObject {
         return contextText
     }
 
-    private func makeFocusedWindowHint(excluding currentPID: pid_t) -> FocusedWindowHint? {
+    /// Freeze only the AppKit-owned frontmost process identity on MainActor.
+    /// Focused-window AX traversal is enriched later on the capture side lane.
+    private func makeFocusedWindowHint(excluding currentPID: pid_t) -> RecordingContextWindowHint? {
         guard let frontmostPID = NSWorkspace.shared.frontmostApplication?.processIdentifier,
               frontmostPID != currentPID else {
             return nil
         }
 
-        var focusedTitle: String?
-        var focusedFrame: CGRect?
-
-        if AXIsProcessTrusted() {
-            let appElement = AXUIElementCreateApplication(frontmostPID)
-            if let focusedWindow = copyAXElementAttribute(kAXFocusedWindowAttribute, from: appElement) {
-                focusedTitle = normalized(copyStringAttribute(kAXTitleAttribute, from: focusedWindow))
-
-                if let position = copyCGPointAttribute(kAXPositionAttribute, from: focusedWindow),
-                   let size = copyCGSizeAttribute(kAXSizeAttribute, from: focusedWindow) {
-                    focusedFrame = CGRect(origin: position, size: size)
-                }
-            }
-        }
-
-        return FocusedWindowHint(
+        return RecordingContextWindowHint(
             processID: frontmostPID,
-            title: focusedTitle,
-            frame: focusedFrame
+            title: nil,
+            frame: nil
         )
     }
 
+    /// Entry point used by recording context capture. It is intentionally
+    /// nonisolated so screenshot acquisition and synchronous Vision OCR can
+    /// never execute on MainActor.
+    nonisolated static func captureAndExtractText(
+        focusedWindowHint: RecordingContextWindowHint,
+        currentPID: pid_t
+    ) async -> String? {
+        await withTimeout(seconds: captureTimeout, operation: {
+            await captureAndExtractWindowText(
+                focusedWindowHint: focusedWindowHint,
+                currentPID: currentPID
+            )
+        })
+    }
+
     private nonisolated static func captureAndExtractWindowText(
-        focusedWindowHint: FocusedWindowHint?,
+        focusedWindowHint: RecordingContextWindowHint?,
         currentPID: pid_t
     ) async -> String? {
         do {
+            // AX calls are synchronous and can traverse another process. They
+            // belong here on the generic executor, never in trigger/UI code.
+            let focusedWindowHint = enrichFocusedWindowHint(focusedWindowHint)
             let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
 
             guard let window = findActiveWindow(
@@ -138,7 +139,7 @@ class ScreenCaptureService: ObservableObject {
 
     private nonisolated static func findActiveWindow(
         in windows: [SCWindow],
-        focusedWindowHint: FocusedWindowHint?,
+        focusedWindowHint: RecordingContextWindowHint?,
         currentPID: pid_t
     ) -> SCWindow? {
         let candidates = windows.filter { window in
@@ -162,12 +163,14 @@ class ScreenCaptureService: ObservableObject {
         }
 
         guard !appWindows.isEmpty else {
-            return candidates.first
+            // Never substitute a different foreground application when the
+            // frozen trigger target has already disappeared.
+            return nil
         }
 
         if let focusedFrame = focusedWindowHint.frame,
            let closestWindow = closestFrameMatch(to: focusedFrame, in: appWindows),
-           frameDistance(closestWindow.frame, focusedFrame) <= focusedWindowFrameTolerance {
+           frameDistance(closestWindow.frame, focusedFrame) <= ScreenCaptureGeometry.focusedWindowFrameTolerance {
             return closestWindow
         }
 
@@ -198,7 +201,7 @@ class ScreenCaptureService: ObservableObject {
             return 1
         }
 
-        return min(2, maximumCaptureDimension / longestSide)
+        return min(2, ScreenCaptureGeometry.maximumDimension / longestSide)
     }
 
     private nonisolated static func extractText(from cgImage: CGImage) -> String? {
@@ -227,23 +230,46 @@ class ScreenCaptureService: ObservableObject {
         seconds: TimeInterval,
         operation: @escaping @Sendable () async -> T?
     ) async -> T? {
-        await withTaskGroup(of: T?.self) { group in
-            group.addTask {
-                await operation()
-            }
-
-            group.addTask {
-                try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
-                return nil
-            }
-
-            let result = await group.next() ?? nil
-            group.cancelAll()
-            return result
-        }
+        try? await NonJoiningTimeout.value(
+            nanoseconds: UInt64(max(0, seconds) * 1_000_000_000),
+            priority: .utility,
+            operation: operation
+        )
     }
 
-    private func copyAXElementAttribute(_ attribute: String, from element: AXUIElement) -> AXUIElement? {
+    private nonisolated static func enrichFocusedWindowHint(
+        _ hint: RecordingContextWindowHint?
+    ) -> RecordingContextWindowHint? {
+        guard let hint, AXIsProcessTrusted() else { return hint }
+
+        let application = AXUIElementCreateApplication(hint.processID)
+        guard let focusedWindow = copyAXElementAttribute(
+            kAXFocusedWindowAttribute,
+            from: application
+        ) else {
+            return hint
+        }
+
+        let title = normalized(copyStringAttribute(kAXTitleAttribute, from: focusedWindow))
+        let frame: CGRect?
+        if let position = copyCGPointAttribute(kAXPositionAttribute, from: focusedWindow),
+           let size = copyCGSizeAttribute(kAXSizeAttribute, from: focusedWindow) {
+            frame = CGRect(origin: position, size: size)
+        } else {
+            frame = hint.frame
+        }
+
+        return RecordingContextWindowHint(
+            processID: hint.processID,
+            title: title ?? hint.title,
+            frame: frame
+        )
+    }
+
+    private nonisolated static func copyAXElementAttribute(
+        _ attribute: String,
+        from element: AXUIElement
+    ) -> AXUIElement? {
         var value: CFTypeRef?
         guard AXUIElementCopyAttributeValue(element, attribute as CFString, &value) == .success,
               let value,
@@ -254,7 +280,10 @@ class ScreenCaptureService: ObservableObject {
         return (value as! AXUIElement)
     }
 
-    private func copyStringAttribute(_ attribute: String, from element: AXUIElement) -> String? {
+    private nonisolated static func copyStringAttribute(
+        _ attribute: String,
+        from element: AXUIElement
+    ) -> String? {
         var value: CFTypeRef?
         guard AXUIElementCopyAttributeValue(element, attribute as CFString, &value) == .success else {
             return nil
@@ -263,7 +292,10 @@ class ScreenCaptureService: ObservableObject {
         return value as? String
     }
 
-    private func copyCGPointAttribute(_ attribute: String, from element: AXUIElement) -> CGPoint? {
+    private nonisolated static func copyCGPointAttribute(
+        _ attribute: String,
+        from element: AXUIElement
+    ) -> CGPoint? {
         var value: CFTypeRef?
         guard AXUIElementCopyAttributeValue(element, attribute as CFString, &value) == .success,
               let value,
@@ -281,7 +313,10 @@ class ScreenCaptureService: ObservableObject {
         return point
     }
 
-    private func copyCGSizeAttribute(_ attribute: String, from element: AXUIElement) -> CGSize? {
+    private nonisolated static func copyCGSizeAttribute(
+        _ attribute: String,
+        from element: AXUIElement
+    ) -> CGSize? {
         var value: CFTypeRef?
         guard AXUIElementCopyAttributeValue(element, attribute as CFString, &value) == .success,
               let value,
@@ -303,9 +338,5 @@ class ScreenCaptureService: ObservableObject {
         guard let text else { return nil }
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? nil : trimmed
-    }
-
-    private func normalized(_ text: String?) -> String? {
-        Self.normalized(text)
     }
 }
