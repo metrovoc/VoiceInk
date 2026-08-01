@@ -4,6 +4,11 @@ import AVFoundation
 import SwiftData
 import os
 
+struct AudioRetranscriptionResult {
+    let transcription: Transcription
+    let enhancementFailure: String?
+}
+
 @MainActor
 class AudioTranscriptionService: ObservableObject {
     @Published var isTranscribing = false
@@ -33,7 +38,7 @@ class AudioTranscriptionService: ObservableObject {
         self.serviceRegistry = serviceRegistry
     }
     
-    func retranscribeAudio(from url: URL, using model: any TranscriptionModel, mode: ModeConfig? = nil) async throws -> Transcription {
+    func retranscribeAudio(from url: URL, using model: any TranscriptionModel, mode: ModeConfig? = nil) async throws -> AudioRetranscriptionResult {
         guard FileManager.default.fileExists(atPath: url.path) else {
             throw TranscriptionError.noAudioFile
         }
@@ -142,8 +147,12 @@ class AudioTranscriptionService: ObservableObject {
                         isTranscribing = false
                     }
 
-                    return newTranscription
+                    return AudioRetranscriptionResult(
+                        transcription: newTranscription,
+                        enhancementFailure: nil
+                    )
                 } catch {
+                    let enhancementFailure = EnhancementFailureFormatter.description(for: error)
                     let newTranscription = Transcription(
                         text: originalText,
                         duration: duration,
@@ -167,7 +176,10 @@ class AudioTranscriptionService: ObservableObject {
                         isTranscribing = false
                     }
 
-                    return newTranscription
+                    return AudioRetranscriptionResult(
+                        transcription: newTranscription,
+                        enhancementFailure: enhancementFailure
+                    )
                 }
             } else {
                 let newTranscription = Transcription(
@@ -192,7 +204,10 @@ class AudioTranscriptionService: ObservableObject {
                     isTranscribing = false
                 }
 
-                return newTranscription
+                return AudioRetranscriptionResult(
+                    transcription: newTranscription,
+                    enhancementFailure: nil
+                )
             }
         } catch {
             logger.error("❌ Transcription failed: \(error, privacy: .public)")

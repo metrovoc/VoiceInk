@@ -622,9 +622,13 @@ struct AudioPlayerView: View {
                     showSuccessFeedback(.reEnhanceSuccess, title: String(localized: "Re-enhancement successful"))
                 }
             } catch {
+                let errorDescription = EnhancementFailureFormatter.description(for: error)
+                let failureMessage = EnhancementFailureFormatter.reEnhancementMessage(
+                    description: errorDescription
+                )
                 await MainActor.run {
                     isReEnhancing = false
-                    showErrorNotification(error.localizedDescription.isEmpty ? String(localized: "Re-enhancement failed") : error.localizedDescription)
+                    showErrorNotification(failureMessage)
                 }
             }
         }
@@ -649,14 +653,24 @@ struct AudioPlayerView: View {
 
         Task {
             do {
-                let _ = try await transcriptionService.retranscribeAudio(
+                let result = try await transcriptionService.retranscribeAudio(
                     from: url,
                     using: transcriptionConfiguration.model,
                     mode: selectedMode
                 )
                 await MainActor.run {
                     isRetranscribing = false
-                    showSuccessFeedback(.retranscribeSuccess, title: String(localized: "Retranscription successful"))
+                    if let enhancementFailure = result.enhancementFailure {
+                        NotificationManager.shared.showNotification(
+                            title: EnhancementFailureFormatter.transcriptionSavedMessage(description: enhancementFailure),
+                            type: .warning
+                        )
+                    } else {
+                        showSuccessFeedback(
+                            .retranscribeSuccess,
+                            title: String(localized: "Retranscription successful")
+                        )
+                    }
                 }
             } catch {
                 await MainActor.run {
