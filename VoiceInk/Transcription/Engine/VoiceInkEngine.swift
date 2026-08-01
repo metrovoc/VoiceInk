@@ -478,6 +478,58 @@ class VoiceInkEngine: NSObject, ObservableObject {
         )
     }
 
+    private func recordingModelFailure(
+        for resolution: ModeTranscriptionModelResolution
+    ) -> (title: String, actionLabel: String, action: () -> Void) {
+        switch resolution {
+        case .noMode:
+            return (
+                String(localized: "No mode configured"),
+                String(localized: "Manage Modes"),
+                navigateAction(to: .modes)
+            )
+        case .noSelection(let mode):
+            return (
+                String(
+                    format: String(localized: "No transcription model is selected for the '%@' mode"),
+                    mode.name
+                ),
+                String(localized: "Manage Modes"),
+                navigateAction(to: .modes)
+            )
+        case .modelNotFound(let mode, let modelName):
+            return (
+                String(
+                    format: String(localized: "'%@' is selected for the %@ mode but is no longer available"),
+                    modelName,
+                    mode.name
+                ),
+                String(localized: "Manage Modes"),
+                navigateAction(to: .modes)
+            )
+        case .unavailable(let mode, let model), .available(let mode, let model):
+            return (
+                String(
+                    format: String(localized: "'%@' is not available for the %@ mode"),
+                    model.displayName,
+                    mode.name
+                ),
+                String(localized: "Manage AI Models"),
+                navigateAction(to: .models)
+            )
+        }
+    }
+
+    private func navigateAction(to destination: ViewType) -> () -> Void {
+        {
+            NotificationCenter.default.post(
+                name: .navigateToDestination,
+                object: nil,
+                userInfo: ["destination": destination.rawValue]
+            )
+        }
+    }
+
     func getEnhancementService() -> AIEnhancementService? {
         return enhancementService
     }
@@ -726,10 +778,19 @@ class VoiceInkEngine: NSObject, ObservableObject {
                                 return
                             }
 
-                            guard let transcriptionConfiguration = ModeRuntimeResolver.transcriptionConfiguration(
+                            let modelResolution = ModeRuntimeResolver.transcriptionModelResolution(
                                 transcriptionModelManager: self.transcriptionModelManager
+                            )
+                            guard let transcriptionConfiguration = ModeRuntimeResolver.transcriptionConfiguration(
+                                from: modelResolution
                             ) else {
-                                NotificationManager.shared.showNotification(title: String(localized: "No AI Model Selected"), type: .error)
+                                let failure = self.recordingModelFailure(for: modelResolution)
+                                NotificationManager.shared.showNotification(
+                                    title: failure.title,
+                                    type: .error,
+                                    duration: 7.0,
+                                    actionButton: (failure.actionLabel, failure.action)
+                                )
                                 await self.recorder.stopRecording(for: audioContinuity)
                                 _ = startupAudioRelay.discard()
                                 guard self.activeRecordingStartID == startID else { return }

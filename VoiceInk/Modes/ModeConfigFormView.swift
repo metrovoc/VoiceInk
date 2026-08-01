@@ -170,6 +170,11 @@ struct ModeConfigFormView: View {
                 )
 
                 Picker("Model", selection: modelBinding) {
+                    if draft.selectedTranscriptionModelName == nil {
+                        Label("Unavailable", systemImage: "waveform")
+                            .tag(nil as String?)
+                    }
+
                     ForEach(warmupSnapshot.usableTranscriptionModels, id: \.name) { model in
                         Text(model.displayName).tag(model.name as String?)
                     }

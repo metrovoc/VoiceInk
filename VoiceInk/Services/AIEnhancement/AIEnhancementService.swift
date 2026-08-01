@@ -445,18 +445,27 @@ class AIEnhancementService: ObservableObject {
         let startTime = Date()
         let promptName = configuration.prompt?.title
 
-        let result = try await makeRequestWithRetry(
-            text: text,
-            configuration: configuration,
-            contextSnapshot: contextSnapshot
-        )
-        return AIEnhancementResponse(
-            text: result.text,
-            duration: Date().timeIntervalSince(startTime),
-            promptName: promptName,
-            systemMessage: result.systemMessage,
-            userMessage: result.userMessage
-        )
+        do {
+            let result = try await makeRequestWithRetry(
+                text: text,
+                configuration: configuration,
+                contextSnapshot: contextSnapshot
+            )
+            return AIEnhancementResponse(
+                text: result.text,
+                duration: Date().timeIntervalSince(startTime),
+                promptName: promptName,
+                systemMessage: result.systemMessage,
+                userMessage: result.userMessage
+            )
+        } catch {
+            let description = EnhancementFailureFormatter.description(for: error)
+            let providerName = configuration.provider?.rawValue ?? "Unconfigured"
+            let modelName = configuration.modelName ?? configuration.provider?.defaultModel ?? "Unconfigured"
+            let duration = Date().timeIntervalSince(startTime)
+            logger.error("Enhancement failed provider=\(providerName, privacy: .public) model=\(modelName, privacy: .public) duration=\(duration, format: .fixed(precision: 3), privacy: .public)s: \(description, privacy: .public)")
+            throw error
+        }
     }
 
     func captureScreenContext() async {
@@ -536,6 +545,39 @@ class AIEnhancementService: ObservableObject {
         if let encoded = try? JSONEncoder().encode(customPrompts) {
             UserDefaults.standard.set(encoded, forKey: "customPrompts")
         }
+    }
+}
+
+enum EnhancementFailureFormatter {
+    static func description(for error: Error) -> String {
+        if let localizedDescription = (error as? LocalizedError)?.errorDescription?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+            !localizedDescription.isEmpty {
+            return localizedDescription
+        }
+
+        let fallbackDescription = error.localizedDescription.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !fallbackDescription.isEmpty {
+            return fallbackDescription
+        }
+
+        return String(localized: "AI enhancement failed to process the text.")
+    }
+
+    static func message(for error: Error) -> String {
+        message(description: description(for: error))
+    }
+
+    static func message(description: String) -> String {
+        String(format: String(localized: "Enhancement failed: %@"), description)
+    }
+
+    static func reEnhancementMessage(description: String) -> String {
+        String(format: String(localized: "Re-enhancement failed: %@"), description)
+    }
+
+    static func transcriptionSavedMessage(description: String) -> String {
+        String(format: String(localized: "Transcription saved, but enhancement failed: %@"), description)
     }
 }
 

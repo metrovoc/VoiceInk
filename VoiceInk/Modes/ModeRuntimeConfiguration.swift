@@ -70,31 +70,82 @@ struct OutputRuntimeConfiguration {
     let customCommand: ModeCustomCommand?
 }
 
+enum ModeTranscriptionModelResolution {
+    case noMode
+    case noSelection(mode: ModeConfig)
+    case modelNotFound(mode: ModeConfig, modelName: String)
+    case unavailable(mode: ModeConfig, model: any TranscriptionModel)
+    case available(mode: ModeConfig, model: any TranscriptionModel)
+}
+
 @MainActor
 enum ModeRuntimeResolver {
+    static func transcriptionModelResolution(
+        mode: ModeConfig? = nil,
+        transcriptionModelManager: TranscriptionModelManager
+    ) -> ModeTranscriptionModelResolution {
+        transcriptionModelResolution(
+            mode: mode ?? ModeManager.shared.currentEffectiveConfiguration,
+            allAvailableModels: transcriptionModelManager.allAvailableModels,
+            usableModels: transcriptionModelManager.usableModels
+        )
+    }
+
+    static func transcriptionModelResolution(
+        mode: ModeConfig?,
+        allAvailableModels: [any TranscriptionModel],
+        usableModels: [any TranscriptionModel]
+    ) -> ModeTranscriptionModelResolution {
+        guard let mode else {
+            return .noMode
+        }
+
+        guard let modelName = mode.selectedTranscriptionModelName?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !modelName.isEmpty else {
+            return .noSelection(mode: mode)
+        }
+
+        guard let model = allAvailableModels.first(where: { $0.name == modelName }) else {
+            return .modelNotFound(mode: mode, modelName: modelName)
+        }
+
+        guard usableModels.contains(where: { $0.name == modelName }) else {
+            return .unavailable(mode: mode, model: model)
+        }
+
+        return .available(mode: mode, model: model)
+    }
+
     static func transcriptionConfiguration(
         mode: ModeConfig? = nil,
         transcriptionModelManager: TranscriptionModelManager
     ) -> TranscriptionRuntimeConfiguration? {
-        let mode = mode ?? ModeManager.shared.currentEffectiveConfiguration
-        let model = resolvedModel(
-            named: mode?.selectedTranscriptionModelName,
-            transcriptionModelManager: transcriptionModelManager
+        transcriptionConfiguration(
+            from: transcriptionModelResolution(
+                mode: mode,
+                transcriptionModelManager: transcriptionModelManager
+            )
         )
+    }
 
-        guard let model else { return nil }
+    static func transcriptionConfiguration(
+        from resolution: ModeTranscriptionModelResolution
+    ) -> TranscriptionRuntimeConfiguration? {
+        guard case .available(let mode, let model) = resolution else {
+            return nil
+        }
 
         let language = TranscriptionLanguageSupport.validLanguageOrFallback(
-            mode?.selectedLanguage,
+            mode.selectedLanguage,
             for: model,
-            realtimeEnabled: mode?.isRealtimeTranscriptionEnabled
+            realtimeEnabled: mode.isRealtimeTranscriptionEnabled
         )
 
         return TranscriptionRuntimeConfiguration(
             mode: mode,
             model: model,
             language: language,
-            isRealtimeEnabled: TranscriptionRealtimeSupport.isEnabled(for: model, modeValue: mode?.isRealtimeTranscriptionEnabled)
+            isRealtimeEnabled: TranscriptionRealtimeSupport.isEnabled(for: model, modeValue: mode.isRealtimeTranscriptionEnabled)
         )
     }
 
@@ -150,18 +201,6 @@ enum ModeRuntimeResolver {
             autoSendKey: mode?.autoSendKey ?? .none,
             customCommand: mode?.customCommand
         )
-    }
-
-    private static func resolvedModel(
-        named modelName: String?,
-        transcriptionModelManager: TranscriptionModelManager
-    ) -> (any TranscriptionModel)? {
-        if let modelName,
-           let model = transcriptionModelManager.usableModel(named: modelName) {
-            return model
-        }
-
-        return transcriptionModelManager.usableModels.first
     }
 
     private static func resolvedPrompt(

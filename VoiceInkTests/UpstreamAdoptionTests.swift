@@ -123,4 +123,171 @@ struct UpstreamAdoptionTests {
             )
         )
     }
+
+    @Test func appDiscoveryDoesNotRecurseThroughDirectorySymlinks() throws {
+        let rootURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("VoiceInkAppDiscovery-\(UUID().uuidString)", isDirectory: true)
+        let appDirectory = rootURL.appendingPathComponent("Applications", isDirectory: true)
+        let linkedDirectory = rootURL.appendingPathComponent("LinkedApplications", isDirectory: true)
+        let directApp = appDirectory.appendingPathComponent("Direct.app", isDirectory: true)
+        let symlinkedDirectoryApp = linkedDirectory.appendingPathComponent("Hidden.app", isDirectory: true)
+        let symlinkTargetApp = linkedDirectory.appendingPathComponent("LinkedTarget.app", isDirectory: true)
+        let directorySymlink = appDirectory.appendingPathComponent("LinkedApplications", isDirectory: true)
+        let appSymlink = appDirectory.appendingPathComponent("LinkedTarget.app", isDirectory: true)
+
+        try FileManager.default.createDirectory(at: directApp, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: symlinkedDirectoryApp, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: symlinkTargetApp, withIntermediateDirectories: true)
+        try FileManager.default.createSymbolicLink(at: directorySymlink, withDestinationURL: linkedDirectory)
+        try FileManager.default.createSymbolicLink(at: appSymlink, withDestinationURL: symlinkTargetApp)
+        defer { try? FileManager.default.removeItem(at: rootURL) }
+
+        let discoveredPaths = Set(
+            InstalledApps.applicationURLs(in: [appDirectory]).map { $0.standardizedFileURL.path }
+        )
+
+        #expect(discoveredPaths.contains(directApp.standardizedFileURL.path))
+        #expect(discoveredPaths.contains(symlinkTargetApp.standardizedFileURL.path))
+        #expect(!discoveredPaths.contains(symlinkedDirectoryApp.standardizedFileURL.path))
+    }
+
+    @Test func inputChannelSelectionUsesPreferredStereoChannels() {
+        #expect(
+            AudioInputChannelSelection.resolve(
+                deviceChannelCount: 8,
+                preferredStereoChannels: [3, 4]
+            ).deviceChannelIndices == [2, 3]
+        )
+
+        #expect(
+            AudioInputChannelSelection.resolve(
+                deviceChannelCount: 4,
+                preferredStereoChannels: [3, 3, 4]
+            ).deviceChannelIndices == [2, 3]
+        )
+    }
+
+    @Test func inputChannelSelectionFallsBackForMissingOrInvalidPreferences() {
+        #expect(
+            AudioInputChannelSelection.resolve(
+                deviceChannelCount: 4,
+                preferredStereoChannels: nil
+            ).deviceChannelIndices == [0, 1]
+        )
+        #expect(
+            AudioInputChannelSelection.resolve(
+                deviceChannelCount: 1,
+                preferredStereoChannels: nil
+            ).deviceChannelIndices == [0]
+        )
+        #expect(
+            AudioInputChannelSelection.resolve(
+                deviceChannelCount: 4,
+                preferredStereoChannels: [0, 1]
+            ).deviceChannelIndices == [0, 1]
+        )
+        #expect(
+            AudioInputChannelSelection.resolve(
+                deviceChannelCount: 0,
+                preferredStereoChannels: [1, 2]
+            ).deviceChannelIndices.isEmpty
+        )
+    }
+
+    @MainActor
+    @Test func modeResolutionDoesNotSubstituteFallbackModelForMissingSelection() {
+        let fallback = testTranscriptionModel(name: "fallback", displayName: "Fallback")
+        let mode = ModeConfig(
+            name: "Dictation",
+            isAIEnhancementEnabled: false,
+            selectedTranscriptionModelName: "removed-model"
+        )
+
+        let resolution = ModeRuntimeResolver.transcriptionModelResolution(
+            mode: mode,
+            allAvailableModels: [fallback],
+            usableModels: [fallback]
+        )
+
+        guard case .modelNotFound(_, let modelName) = resolution else {
+            Issue.record("Expected missing model resolution")
+            return
+        }
+        #expect(modelName == "removed-model")
+        #expect(ModeRuntimeResolver.transcriptionConfiguration(from: resolution) == nil)
+    }
+
+    @MainActor
+    @Test func modeResolutionRejectsKnownButUnavailableSelectedModel() {
+        let selected = testTranscriptionModel(name: "selected", displayName: "Selected")
+        let fallback = testTranscriptionModel(name: "fallback", displayName: "Fallback")
+        let mode = ModeConfig(
+            name: "Dictation",
+            isAIEnhancementEnabled: false,
+            selectedTranscriptionModelName: selected.name
+        )
+
+        let resolution = ModeRuntimeResolver.transcriptionModelResolution(
+            mode: mode,
+            allAvailableModels: [selected, fallback],
+            usableModels: [fallback]
+        )
+
+        guard case .unavailable(_, let model) = resolution else {
+            Issue.record("Expected unavailable model resolution")
+            return
+        }
+        #expect(model.name == selected.name)
+        #expect(ModeRuntimeResolver.transcriptionConfiguration(from: resolution) == nil)
+    }
+
+    @MainActor
+    @Test func modeResolutionReturnsSelectedUsableModel() throws {
+        let selected = testTranscriptionModel(name: "selected", displayName: "Selected")
+        let mode = ModeConfig(
+            name: "Dictation",
+            isAIEnhancementEnabled: false,
+            selectedTranscriptionModelName: selected.name,
+            selectedLanguage: "fr"
+        )
+
+        let resolution = ModeRuntimeResolver.transcriptionModelResolution(
+            mode: mode,
+            allAvailableModels: [selected],
+            usableModels: [selected]
+        )
+        let configuration = try #require(ModeRuntimeResolver.transcriptionConfiguration(from: resolution))
+
+        #expect(configuration.model.name == selected.name)
+        #expect(configuration.language == "fr")
+    }
+
+    @Test func enhancementFailureFormatterUsesLocalizedDescription() {
+        let description = EnhancementFailureFormatter.description(for: LocalizedEnhancementFailure())
+
+        #expect(description == "Detailed enhancement failure")
+        #expect(
+            EnhancementFailureFormatter.reEnhancementMessage(description: description)
+                == "Re-enhancement failed: Detailed enhancement failure"
+        )
+    }
+
+    private func testTranscriptionModel(name: String, displayName: String) -> CloudModel {
+        CloudModel(
+            name: name,
+            displayName: displayName,
+            description: "Test model",
+            provider: .deepgram,
+            speed: 1,
+            accuracy: 1,
+            isMultilingual: true,
+            supportedLanguages: ["en": "English", "fr": "French"]
+        )
+    }
+}
+
+private struct LocalizedEnhancementFailure: LocalizedError {
+    var errorDescription: String? {
+        "Detailed enhancement failure"
+    }
 }
