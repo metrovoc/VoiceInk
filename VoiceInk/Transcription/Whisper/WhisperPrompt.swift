@@ -5,13 +5,13 @@ import Foundation
 class WhisperPrompt: ObservableObject {
     @Published var transcriptionPrompt: String = UserDefaults.standard.string(forKey: "TranscriptionPrompt") ?? ""
     
-    private let customPromptsKey = "CustomLanguagePrompts"
+    nonisolated private static let customPromptsKey = "CustomLanguagePrompts"
     
     // Store user-customized prompts
     private var customPrompts: [String: String] = [:]
     
     // Language-specific base prompts
-    private let languagePrompts: [String: String] = [
+    nonisolated private static let languagePrompts: [String: String] = [
         // English
         "en": "Hello, how are you doing? Nice to meet you.",
         
@@ -74,13 +74,11 @@ class WhisperPrompt: ObservableObject {
     }
     
     private func loadCustomPrompts() {
-        if let savedPrompts = UserDefaults.standard.dictionary(forKey: customPromptsKey) as? [String: String] {
-            customPrompts = savedPrompts
-        }
+        customPrompts = Self.savedCustomPrompts()
     }
     
     private func saveCustomPrompts() {
-        UserDefaults.standard.set(customPrompts, forKey: customPromptsKey)
+        UserDefaults.standard.set(customPrompts, forKey: Self.customPromptsKey)
         UserDefaults.standard.synchronize() // Force immediate synchronization
     }
     
@@ -107,7 +105,25 @@ class WhisperPrompt: ObservableObject {
         }
         
         // Otherwise return the default prompt, with safe fallback
+        return Self.languagePrompts[language] ?? Self.languagePrompts["default"] ?? ""
+    }
+
+    nonisolated static func resolvedPrompt(for language: String?) -> String {
+        guard let language, !language.isEmpty else { return "" }
+
+        if let customPrompt = savedCustomPrompts()[language], !customPrompt.isEmpty {
+            return customPrompt
+        }
+
         return languagePrompts[language] ?? languagePrompts["default"] ?? ""
+    }
+
+    nonisolated private static func savedCustomPrompts() -> [String: String] {
+        guard let savedPrompts = UserDefaults.standard.dictionary(forKey: customPromptsKey) else {
+            return [:]
+        }
+
+        return savedPrompts.compactMapValues { $0 as? String }
     }
     
     func setCustomPrompt(_ prompt: String, for language: String) {

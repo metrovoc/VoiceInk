@@ -272,6 +272,69 @@ struct UpstreamAdoptionTests {
         )
     }
 
+    @Test func whisperPromptResolutionUsesSelectedLanguagePrompt() {
+        let defaults = UserDefaults.standard
+        let key = "CustomLanguagePrompts"
+        let original = defaults.object(forKey: key)
+        defer { restoreUserDefault(original, forKey: key) }
+
+        defaults.set(["fr": "Bonjour, ceci est un prompt personnalisé."], forKey: key)
+
+        #expect(WhisperPrompt.resolvedPrompt(for: "fr") == "Bonjour, ceci est un prompt personnalisé.")
+        #expect(WhisperPrompt.resolvedPrompt(for: "ja").contains("こんにちは"))
+        #expect(WhisperPrompt.resolvedPrompt(for: nil).isEmpty)
+    }
+
+    @Test func transcriptionRuntimeConfigurationScopesPromptToWhisper() {
+        let whisperModel = WhisperModel(
+            name: "ggml-test",
+            displayName: "Whisper Test",
+            size: "1 MB",
+            supportedLanguages: ["de": "German"],
+            description: "Test model",
+            speed: 1,
+            accuracy: 1,
+            ramUsage: 1
+        )
+        let whisperConfiguration = TranscriptionRuntimeConfiguration(
+            mode: nil,
+            model: whisperModel,
+            language: "de",
+            isRealtimeEnabled: false
+        )
+        let cloudConfiguration = TranscriptionRuntimeConfiguration(
+            mode: nil,
+            model: testTranscriptionModel(name: "deepgram-test", displayName: "Deepgram Test"),
+            language: "de",
+            isRealtimeEnabled: false
+        )
+
+        #expect(whisperConfiguration.requestContext.prompt == WhisperPrompt.resolvedPrompt(for: "de"))
+        #expect(whisperConfiguration.requestContext.prompt?.isEmpty == false)
+        #expect(cloudConfiguration.requestContext.prompt == nil)
+    }
+
+    @Test func openAIEnhancementCatalogIncludesGPT56Models() {
+        #expect(AIProvider.openAI.defaultModel == "gpt-5.6-luna")
+        #expect(Array(AIProvider.openAI.availableModels.prefix(3)) == [
+            "gpt-5.6-luna",
+            "gpt-5.6-terra",
+            "gpt-5.6-sol"
+        ])
+        #expect(ReasoningConfig.getReasoningParameter(for: .openAI, modelName: "gpt-5.6-luna") == "none")
+        #expect(ReasoningConfig.getReasoningParameter(for: .openAI, modelName: "gpt-5.6-terra") == "none")
+        #expect(ReasoningConfig.getReasoningParameter(for: .openAI, modelName: "gpt-5.6-sol") == "none")
+    }
+
+    @Test func recorderEscapeTimeoutUsesGenerationGuard() throws {
+        let source = try readProjectSource("VoiceInk/Shortcuts/RecorderPanelShortcutManager.swift")
+
+        #expect(source.contains("private var activeEscapePressID: UUID?"))
+        #expect(source.contains("let escapePressID = UUID()"))
+        #expect(source.contains("guard self?.activeEscapePressID == escapePressID else { return }"))
+        #expect(source.contains("self?.escapeTimeoutTask = nil"))
+    }
+
     private func testTranscriptionModel(name: String, displayName: String) -> CloudModel {
         CloudModel(
             name: name,
@@ -283,6 +346,24 @@ struct UpstreamAdoptionTests {
             isMultilingual: true,
             supportedLanguages: ["en": "English", "fr": "French"]
         )
+    }
+
+    private func readProjectSource(_ relativePath: String) throws -> String {
+        let projectRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        return try String(
+            contentsOf: projectRoot.appendingPathComponent(relativePath),
+            encoding: .utf8
+        )
+    }
+
+    private func restoreUserDefault(_ value: Any?, forKey key: String) {
+        if let value {
+            UserDefaults.standard.set(value, forKey: key)
+        } else {
+            UserDefaults.standard.removeObject(forKey: key)
+        }
     }
 }
 

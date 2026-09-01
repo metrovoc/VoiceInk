@@ -5,10 +5,19 @@ struct TranscriptionRequestContext: Sendable {
     let prompt: String?
 
     static var currentDefaults: TranscriptionRequestContext {
-        TranscriptionRequestContext(
-            language: UserDefaults.standard.string(forKey: "SelectedLanguage") ?? "auto",
-            prompt: UserDefaults.standard.string(forKey: "TranscriptionPrompt")
+        let language = UserDefaults.standard.string(forKey: "SelectedLanguage") ?? "auto"
+        return TranscriptionRequestContext(
+            language: language,
+            prompt: WhisperPrompt.resolvedPrompt(for: language)
         )
+    }
+
+    func scoped(to model: any TranscriptionModel) -> TranscriptionRequestContext {
+        guard model.provider == .whisper else {
+            return TranscriptionRequestContext(language: language, prompt: nil)
+        }
+
+        return self
     }
 }
 
@@ -27,6 +36,10 @@ protocol TranscriptionService: Sendable {
 
 extension TranscriptionService {
     func transcribe(audioURL: URL, model: any TranscriptionModel) async throws -> String {
-        try await transcribe(audioURL: audioURL, model: model, context: .currentDefaults)
+        try await transcribe(
+            audioURL: audioURL,
+            model: model,
+            context: TranscriptionRequestContext.currentDefaults.scoped(to: model)
+        )
     }
 }
