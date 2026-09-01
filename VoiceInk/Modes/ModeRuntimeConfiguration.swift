@@ -20,7 +20,7 @@ struct TranscriptionRuntimeConfiguration {
         self.isRealtimeEnabled = isRealtimeEnabled
         self.requestContext = requestContext ?? TranscriptionRequestContext(
             language: language,
-            prompt: UserDefaults.standard.string(forKey: "TranscriptionPrompt")
+            prompt: model.provider == .whisper ? WhisperPrompt.resolvedPrompt(for: language) : nil
         )
     }
 

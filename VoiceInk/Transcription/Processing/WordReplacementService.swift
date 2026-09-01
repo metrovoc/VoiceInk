@@ -9,6 +9,9 @@ struct WordReplacementRuleSnapshot: Sendable, Equatable {
 class WordReplacementService {
     static let shared = WordReplacementService()
 
+    private static let boundaryWordCharacterPattern =
+        "[[\\p{L}\\p{M}\\p{N}]-[\\p{scx=Han}\\p{scx=Hiragana}\\p{scx=Katakana}\\p{scx=Hangul}\\p{scx=Thai}]]"
+
     private init() {}
 
     func applyReplacements(to text: String, using context: ModelContext) -> String {
@@ -60,9 +63,10 @@ class WordReplacementService {
                 let usesBoundaries = usesWordBoundaries(for: original)
 
                 if usesBoundaries {
-                    // Lookarounds instead of \b so punctuation acts as a word boundary
+                    // Lookarounds instead of \b so punctuation acts as a word boundary.
                     let escaped = NSRegularExpression.escapedPattern(for: original)
-                    let pattern = "(?<![a-zA-Z0-9])\(escaped)(?![a-zA-Z0-9])"
+                    let wordCharacter = Self.boundaryWordCharacterPattern
+                    let pattern = "(?<!\(wordCharacter))\(escaped)(?!\(wordCharacter))"
                     if let regex = try? NSRegularExpression(pattern: pattern, options: .caseInsensitive) {
                         let range = NSRange(modifiedText.startIndex..., in: modifiedText)
                         modifiedText = regex.stringByReplacingMatches(

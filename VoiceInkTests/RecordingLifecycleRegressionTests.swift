@@ -758,36 +758,23 @@ struct RecordingLifecycleRegressionTests {
         #expect(fallbackService.modelNames == ["deepgram-live"])
     }
 
-    @Test func transcriptionRuntimeConfigurationSnapshotsRequestContext() {
-        let defaults = UserDefaults.standard
-        let key = "TranscriptionPrompt"
-        let originalPrompt = defaults.string(forKey: key)
-        defer {
-            if let originalPrompt {
-                defaults.set(originalPrompt, forKey: key)
-            } else {
-                defaults.removeObject(forKey: key)
-            }
-        }
-
-        defaults.set("old prompt", forKey: key)
-        let oldConfiguration = TranscriptionRuntimeConfiguration(
+    @Test func transcriptionRuntimeConfigurationScopesDefaultPromptToWhisper() {
+        let whisperConfiguration = TranscriptionRuntimeConfiguration(
+            mode: nil,
+            model: makeWhisperTestModel(),
+            language: "en",
+            isRealtimeEnabled: true
+        )
+        let cloudConfiguration = TranscriptionRuntimeConfiguration(
             mode: nil,
             model: makeCloudModel(name: "deepgram-live", provider: .deepgram),
             language: "en",
             isRealtimeEnabled: true
         )
 
-        defaults.set("new prompt", forKey: key)
-        let newConfiguration = TranscriptionRuntimeConfiguration(
-            mode: nil,
-            model: makeCloudModel(name: "deepgram-live", provider: .deepgram),
-            language: "en",
-            isRealtimeEnabled: true
-        )
-
-        #expect(oldConfiguration.requestContext.prompt == "old prompt")
-        #expect(newConfiguration.requestContext.prompt == "new prompt")
+        #expect(whisperConfiguration.requestContext.prompt == WhisperPrompt.resolvedPrompt(for: "en"))
+        #expect(whisperConfiguration.requestContext.prompt?.isEmpty == false)
+        #expect(cloudConfiguration.requestContext.prompt == nil)
     }
 
     @MainActor
@@ -1446,6 +1433,19 @@ private func makeCloudModel(name: String, provider: ModelProvider) -> CloudModel
         isMultilingual: true,
         supportsStreaming: true,
         supportedLanguages: ["en": "English"]
+    )
+}
+
+private func makeWhisperTestModel() -> WhisperModel {
+    WhisperModel(
+        name: "ggml-test",
+        displayName: "Whisper Test",
+        size: "1 MB",
+        supportedLanguages: ["en": "English"],
+        description: "Test model",
+        speed: 1,
+        accuracy: 1,
+        ramUsage: 1
     )
 }
 

@@ -69,4 +69,32 @@ struct TranscriptionTextProcessorTests {
         #expect(first.cleanedText.contains("value0"))
         #expect(first.cleanedText.contains("value1999"))
     }
+
+    @Test func wordReplacementsDoNotMatchInsideUnicodeWords() {
+        let result = WordReplacementService.applyReplacements(
+            to: "Please do not change vergrößern, but change ERN.",
+            rules: [
+                WordReplacementRuleSnapshot(
+                    originalText: "ERN",
+                    replacementText: "EAN"
+                )
+            ]
+        )
+
+        #expect(result == "Please do not change vergrößern, but change EAN.")
+    }
+
+    @Test func wordReplacementsKeepPunctuationAndNonSpacedScriptBoundaries() {
+        let result = WordReplacementService.applyReplacements(
+            to: "Use c++ near 日本fooไทย.",
+            rules: [
+                WordReplacementRuleSnapshot(
+                    originalText: "c++, foo",
+                    replacementText: "token"
+                )
+            ]
+        )
+
+        #expect(result == "Use token near 日本tokenไทย.")
+    }
 }

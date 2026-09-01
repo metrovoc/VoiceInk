@@ -56,7 +56,7 @@ class AudioTranscriptionService: ObservableObject {
             )
             let requestContext = TranscriptionRequestContext(
                 language: language,
-                prompt: UserDefaults.standard.string(forKey: "TranscriptionPrompt")
+                prompt: model.provider == .whisper ? WhisperPrompt.resolvedPrompt(for: language) : nil
             )
             let modeName = (mode?.isEnabled == true) ? mode?.name : nil
             let modeEmoji = (mode?.isEnabled == true) ? mode?.icon.value : nil
