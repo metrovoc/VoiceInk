@@ -3,6 +3,8 @@ import Foundation
 import os
 
 final class SoundPlaybackEngine: @unchecked Sendable {
+    static let customSoundVolume: Float = 1.0
+
     private enum Sound {
         case start
         case stop
@@ -61,8 +63,8 @@ final class SoundPlaybackEngine: @unchecked Sendable {
             customStopSound?.stop()
         }
 
-        customStartSound = makePlayer(from: startURL, volume: 0.4)
-        customStopSound = makePlayer(from: stopURL, volume: 0.4)
+        customStartSound = makePlayer(from: startURL, volume: Self.customSoundVolume)
+        customStopSound = makePlayer(from: stopURL, volume: Self.customSoundVolume)
     }
 
     private func play(_ sound: Sound) {

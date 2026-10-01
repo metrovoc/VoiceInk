@@ -1,4 +1,5 @@
 import AppKit
+import CoreGraphics
 import Foundation
 import Testing
 @testable import VoiceInk_CE
@@ -333,6 +334,73 @@ struct UpstreamAdoptionTests {
         #expect(source.contains("let escapePressID = UUID()"))
         #expect(source.contains("guard self?.activeEscapePressID == escapePressID else { return }"))
         #expect(source.contains("self?.escapeTimeoutTask = nil"))
+    }
+
+    @Test func lockedOrInactiveSessionsRejectShortcutHandling() {
+        let onConsoleKey = kCGSessionOnConsoleKey as String
+        let loginDoneKey = kCGSessionLoginDoneKey as String
+
+        #expect(UserSessionInputPolicy.allowsShortcutHandling(sessionProperties: [
+            onConsoleKey: true,
+            loginDoneKey: true,
+            "CGSSessionScreenIsLocked": false
+        ]))
+        #expect(!UserSessionInputPolicy.allowsShortcutHandling(sessionProperties: [
+            onConsoleKey: true,
+            loginDoneKey: true,
+            "CGSSessionScreenIsLocked": true
+        ]))
+        #expect(!UserSessionInputPolicy.allowsShortcutHandling(sessionProperties: [
+            onConsoleKey: false,
+            loginDoneKey: true
+        ]))
+        #expect(!UserSessionInputPolicy.allowsShortcutHandling(sessionProperties: [
+            onConsoleKey: NSNumber(value: true),
+            loginDoneKey: NSNumber(value: false)
+        ]))
+    }
+
+    @Test func elevenLabsCatalogIncludesMedicalBatchModel() throws {
+        let model = try #require(
+            ElevenLabsProvider().models.first { $0.name == "scribe_v2_medical" }
+        )
+
+        #expect(model.displayName == "Scribe V2 Medical")
+        #expect(model.isMultilingualModel)
+        #expect(!model.supportsStreaming)
+        #expect(AIProvider.elevenLabs.availableModels.contains(model.name))
+    }
+
+    @Test func customRecordingSoundsUseSourceVolume() {
+        #expect(SoundPlaybackEngine.customSoundVolume == 1.0)
+    }
+
+    @Test func canceledTranscriptionKeepsEnhancementAttemptMetadata() {
+        let transcription = Transcription(text: "draft", duration: 1)
+        transcription.recordEnhancementAttempt(
+            modelName: "gpt-test",
+            promptName: "Polish"
+        )
+
+        transcription.markAsCanceledTranscription()
+
+        #expect(transcription.aiEnhancementModelName == "gpt-test")
+        #expect(transcription.promptName == "Polish")
+        #expect(transcription.transcriptionStatus == TranscriptionStatus.canceled.rawValue)
+        #expect(transcription.enhancedText == nil)
+    }
+
+    @Test func mediaRestorationUsesRecordingContinuitySession() throws {
+        let recorder = try readProjectSource("VoiceInk/Recorder.swift")
+        let mediaController = try readProjectSource("VoiceInk/MediaController.swift")
+        let playbackController = try readProjectSource("VoiceInk/PlaybackController.swift")
+
+        #expect(recorder.contains("mediaController.beginRecordingSession(continuity.sessionID)"))
+        #expect(recorder.contains("unmuteSystemAudio(sessionID: sessionID)"))
+        #expect(recorder.contains("resumeMedia(sessionID: sessionID)"))
+        #expect(mediaController.contains("private var mutedDeviceIDs: Set<AudioDeviceID>"))
+        #expect(mediaController.contains("for deviceID in Array(mutedDeviceIDs)"))
+        #expect(playbackController.contains("activeRecordingSessionID == sessionID"))
     }
 
     private func testTranscriptionModel(name: String, displayName: String) -> CloudModel {

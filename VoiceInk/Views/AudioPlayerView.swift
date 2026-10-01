@@ -602,6 +602,11 @@ struct AudioPlayerView: View {
 
         isReEnhancing = true
         operationFeedback = nil
+        transcription.recordEnhancementAttempt(
+            modelName: enhancementConfiguration.modelName
+                ?? enhancementConfiguration.provider?.defaultModel,
+            promptName: enhancementConfiguration.prompt?.title
+        )
 
         Task {
             do {
@@ -611,8 +616,8 @@ struct AudioPlayerView: View {
                 )
                 await MainActor.run {
                     transcription.enhancedText = enhancement.text
-                    transcription.aiEnhancementModelName = enhancementConfiguration.modelName ?? enhancementConfiguration.provider?.defaultModel
                     transcription.promptName = enhancement.promptName
+                        ?? enhancementConfiguration.prompt?.title
                     transcription.enhancementDuration = enhancement.duration
                     transcription.aiRequestSystemMessage = enhancement.systemMessage
                     transcription.aiRequestUserMessage = enhancement.userMessage
@@ -627,6 +632,7 @@ struct AudioPlayerView: View {
                     description: errorDescription
                 )
                 await MainActor.run {
+                    try? modelContext.save()
                     isReEnhancing = false
                     showErrorNotification(failureMessage)
                 }

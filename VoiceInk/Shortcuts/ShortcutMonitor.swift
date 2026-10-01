@@ -187,6 +187,13 @@ final class ShortcutMonitor {
     }
 
     private func handleCGEvent(type: CGEventType, event: CGEvent) -> Bool {
+        guard UserSessionInputPolicy.allowsShortcutHandling else {
+            stateLock.lock()
+            clearPressedShortcutState()
+            stateLock.unlock()
+            return false
+        }
+
         guard let eventKind = EventKind(type) else {
             return false
         }
@@ -201,6 +208,18 @@ final class ShortcutMonitor {
             modifierFlags: modifierFlags,
             eventTime: ProcessInfo.processInfo.systemUptime
         )
+    }
+
+    /// Locked-session events must not leave a shortcut logically pressed. No
+    /// callbacks are emitted because the input is intentionally ignored.
+    private func clearPressedShortcutState() {
+        for action in Array(shortcuts.keys) {
+            guard var state = shortcuts[action] else { continue }
+            state.isDown = false
+            state.pressedAt = nil
+            state.isInterrupted = false
+            shortcuts[action] = state
+        }
     }
 
     private func resetPressedShortcutsAfterTapInterruption() {

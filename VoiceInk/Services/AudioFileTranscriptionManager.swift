@@ -211,7 +211,7 @@ class AudioTranscriptionManager: ObservableObject {
                         audioFileURL: permanentURL.absoluteString,
                         transcriptionModelName: currentModel.displayName,
                         aiEnhancementModelName: enhancementConfiguration.modelName ?? enhancementConfiguration.provider?.defaultModel,
-                        promptName: enhancement.promptName,
+                        promptName: enhancement.promptName ?? enhancementConfiguration.prompt?.title,
                         transcriptionDuration: transcriptionDuration,
                         enhancementDuration: enhancement.duration,
                         aiRequestSystemMessage: enhancement.systemMessage,
@@ -227,7 +227,9 @@ class AudioTranscriptionManager: ObservableObject {
                         enhancedText: "Enhancement failed: \(error.localizedDescription)",
                         audioFileURL: permanentURL.absoluteString,
                         transcriptionModelName: currentModel.displayName,
-                        promptName: nil,
+                        aiEnhancementModelName: enhancementConfiguration.modelName
+                            ?? enhancementConfiguration.provider?.defaultModel,
+                        promptName: enhancementConfiguration.prompt?.title,
                         transcriptionDuration: transcriptionDuration,
                         modeName: modeMetadata.name,
                         modeEmoji: modeMetadata.emoji
