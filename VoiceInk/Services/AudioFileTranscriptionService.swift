@@ -127,7 +127,7 @@ class AudioTranscriptionService: ObservableObject {
                         audioFileURL: permanentURLString,
                         transcriptionModelName: model.displayName,
                         aiEnhancementModelName: enhancementConfiguration.modelName ?? enhancementConfiguration.provider?.defaultModel,
-                        promptName: enhancement.promptName,
+                        promptName: enhancement.promptName ?? enhancementConfiguration.prompt?.title,
                         transcriptionDuration: transcriptionDuration,
                         enhancementDuration: enhancement.duration,
                         aiRequestSystemMessage: enhancement.systemMessage,
@@ -158,7 +158,9 @@ class AudioTranscriptionService: ObservableObject {
                         duration: duration,
                         audioFileURL: permanentURLString,
                         transcriptionModelName: model.displayName,
-                        promptName: nil,
+                        aiEnhancementModelName: enhancementConfiguration.modelName
+                            ?? enhancementConfiguration.provider?.defaultModel,
+                        promptName: enhancementConfiguration.prompt?.title,
                         transcriptionDuration: transcriptionDuration,
                         modeName: modeName,
                         modeEmoji: modeEmoji

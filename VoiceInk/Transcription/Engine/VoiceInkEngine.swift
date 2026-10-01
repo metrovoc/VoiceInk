@@ -630,7 +630,7 @@ class VoiceInkEngine: NSObject, ObservableObject {
                         return
                     }
 
-                    self.recorder.scheduleSystemMute()
+                    self.recorder.scheduleSystemMute(for: audioContinuity)
                     let hardwareStartStartedAt = ProcessInfo.processInfo.systemUptime
                     let hardwareStart = self.recorder.beginStartRecording(
                         toOutputFile: permanentURL,

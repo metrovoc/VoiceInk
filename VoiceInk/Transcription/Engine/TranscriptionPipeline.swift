@@ -204,14 +204,19 @@ class TranscriptionPipeline {
 
                     do {
                         let contextSnapshot = await recordingContextSnapshot()
+                        transcription.recordEnhancementAttempt(
+                            modelName: resolvedEnhancementConfiguration.modelName
+                                ?? resolvedEnhancementConfiguration.provider?.defaultModel,
+                            promptName: resolvedEnhancementConfiguration.prompt?.title
+                        )
                         let enhancement = try await enhancementService.enhanceDetailed(
                             textForAI,
                             configuration: resolvedEnhancementConfiguration,
                             contextSnapshot: contextSnapshot
                         )
                         transcription.enhancedText = enhancement.text
-                        transcription.aiEnhancementModelName = resolvedEnhancementConfiguration.modelName ?? resolvedEnhancementConfiguration.provider?.defaultModel
                         transcription.promptName = enhancement.promptName
+                            ?? resolvedEnhancementConfiguration.prompt?.title
                         transcription.enhancementDuration = enhancement.duration
                         transcription.aiRequestSystemMessage = enhancement.systemMessage
                         transcription.aiRequestUserMessage = enhancement.userMessage

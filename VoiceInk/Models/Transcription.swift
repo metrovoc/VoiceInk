@@ -63,6 +63,11 @@ final class Transcription {
         self.transcriptionStatus = transcriptionStatus.rawValue
     }
 
+    func recordEnhancementAttempt(modelName: String?, promptName: String?) {
+        aiEnhancementModelName = modelName
+        self.promptName = promptName
+    }
+
     func markAsCanceledTranscription(
         duration: TimeInterval? = nil,
         modelName: String? = nil
@@ -77,10 +82,5 @@ final class Transcription {
             transcriptionModelName = modelName
         }
         transcriptionDuration = nil
-        enhancementDuration = nil
-        aiEnhancementModelName = nil
-        promptName = nil
-        aiRequestSystemMessage = nil
-        aiRequestUserMessage = nil
     }
 }

@@ -39,6 +39,17 @@ struct ElevenLabsProvider: CloudProvider {
             isMultilingual: true,
             supportsStreaming: true,
             supportedLanguages: LanguageDictionary.forProvider(isMultilingual: true, provider: .elevenLabs)
+        ),
+        CloudModel(
+            name: "scribe_v2_medical",
+            displayName: "Scribe V2 Medical",
+            description: "Clinical transcription optimized for medical terminology in more than 90 languages.",
+            provider: .elevenLabs,
+            speed: 0.9,
+            accuracy: 0.99,
+            isMultilingual: true,
+            supportsStreaming: false,
+            supportedLanguages: LanguageDictionary.forProvider(isMultilingual: true, provider: .elevenLabs)
         )
     ]}
 

@@ -3,14 +3,16 @@ import Combine
 import Foundation
 import SwiftUI
 import MediaRemoteAdapter
+
+@MainActor
 class PlaybackController: ObservableObject {
     static let shared = PlaybackController()
     private var mediaController: MediaRemoteAdapter.MediaController
+    private var activeRecordingSessionID: UUID?
     private var wasPlayingWhenRecordingStarted = false
     private var isMediaPlaying = false
     private var lastKnownTrackInfo: TrackInfo?
     private var originalMediaAppBundleId: String?
-    private var resumeTask: Task<Void, Never>?
 
     @Published var isPauseMediaEnabled: Bool = UserDefaults.standard.bool(forKey: "isPauseMediaEnabled") {
         didSet {
@@ -48,16 +50,26 @@ class PlaybackController: ObservableObject {
     }
     
     private func stopMediaTracking() {
+        activeRecordingSessionID = nil
         mediaController.stopListening()
         isMediaPlaying = false
         lastKnownTrackInfo = nil
         wasPlayingWhenRecordingStarted = false
         originalMediaAppBundleId = nil
     }
+
+    func beginRecordingSession(_ sessionID: UUID) {
+        activeRecordingSessionID = sessionID
+    }
     
-    func pauseMedia() async {
-        resumeTask?.cancel()
-        resumeTask = nil
+    func pauseMedia(sessionID: UUID) async {
+        guard activeRecordingSessionID == sessionID, !Task.isCancelled else { return }
+
+        if wasPlayingWhenRecordingStarted,
+           lastKnownTrackInfo?.payload.bundleIdentifier == originalMediaAppBundleId,
+           lastKnownTrackInfo?.payload.isPlaying == false {
+            return
+        }
 
         wasPlayingWhenRecordingStarted = false
         originalMediaAppBundleId = nil
@@ -73,20 +85,24 @@ class PlaybackController: ObservableObject {
         originalMediaAppBundleId = bundleId
 
         try? await Task.sleep(nanoseconds: 50_000_000)
-        guard !Task.isCancelled else { return }
+        guard activeRecordingSessionID == sessionID,
+              !Task.isCancelled,
+              lastKnownTrackInfo?.payload.bundleIdentifier == bundleId,
+              lastKnownTrackInfo?.payload.isPlaying == true else {
+            wasPlayingWhenRecordingStarted = false
+            originalMediaAppBundleId = nil
+            return
+        }
 
         mediaController.pause()
     }
 
-    func resumeMedia() async {
+    func resumeMedia(sessionID: UUID) async {
+        guard activeRecordingSessionID == sessionID, !Task.isCancelled else { return }
+
         let shouldResume = wasPlayingWhenRecordingStarted
         let originalBundleId = originalMediaAppBundleId
         let delay = MediaController.shared.audioResumptionDelay
-
-        defer {
-            wasPlayingWhenRecordingStarted = false
-            originalMediaAppBundleId = nil
-        }
 
         guard isPauseMediaEnabled,
               shouldResume,
@@ -94,29 +110,26 @@ class PlaybackController: ObservableObject {
             return
         }
 
-        guard isAppStillRunning(bundleId: bundleId) else {
-            return
+        if delay > 0 {
+            do {
+                try await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+            } catch {
+                return
+            }
         }
 
-        guard let currentTrackInfo = lastKnownTrackInfo,
-              let currentBundleId = currentTrackInfo.payload.bundleIdentifier,
-              currentBundleId == bundleId,
+        guard activeRecordingSessionID == sessionID,
+              !Task.isCancelled,
+              isAppStillRunning(bundleId: bundleId),
+              let currentTrackInfo = lastKnownTrackInfo,
+              currentTrackInfo.payload.bundleIdentifier == bundleId,
               currentTrackInfo.payload.isPlaying == false else {
             return
         }
 
-        let task = Task {
-            try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
-
-            if Task.isCancelled {
-                return
-            }
-
-            Self.sendMediaPlayPauseKey()
-        }
-
-        resumeTask = task
-        await task.value
+        Self.sendMediaPlayPauseKey()
+        wasPlayingWhenRecordingStarted = false
+        originalMediaAppBundleId = nil
     }
 
     /// Simulate the hardware media Play/Pause key (NX_KEYTYPE_PLAY = 16).
@@ -148,4 +161,3 @@ class PlaybackController: ObservableObject {
         return runningApps.contains { $0.bundleIdentifier == bundleId }
     }
 }
-

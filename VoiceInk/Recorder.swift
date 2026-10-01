@@ -147,9 +147,13 @@ final class Recorder: NSObject, ObservableObject {
         }
     }
 
-    func scheduleSystemMute(afterDelayNanoseconds delay: UInt64 = 250_000_000) {
+    func scheduleSystemMute(
+        for continuity: RecordingAudioContinuity,
+        afterDelayNanoseconds delay: UInt64 = 250_000_000
+    ) {
+        let sessionID = continuity.sessionID
         audioTaskCoordinator.scheduleMute(afterDelayNanoseconds: delay) { [mediaController] in
-            _ = await mediaController.muteSystemAudio()
+            _ = mediaController.muteSystemAudio(sessionID: sessionID)
         }
     }
 
@@ -167,6 +171,8 @@ final class Recorder: NSObject, ObservableObject {
 
         audioTaskCoordinator.cancelRestoration()
         activeRecordingContinuity = continuity
+        mediaController.beginRecordingSession(continuity.sessionID)
+        playbackController.beginRecordingSession(continuity.sessionID)
         #if DEBUG
         logger.debug("Recording start preflight completed elapsed=\(elapsed(), format: .fixed(precision: 3), privacy: .public)s")
         #endif
@@ -199,8 +205,9 @@ final class Recorder: NSObject, ObservableObject {
             )
         }
         logger.notice("Recording hardware started deviceID=\(result.deviceID, privacy: .public)")
+        guard let sessionID = activeRecordingContinuity?.sessionID else { return }
         audioTaskCoordinator.schedulePause { [playbackController] in
-            await playbackController.pauseMedia()
+            await playbackController.pauseMedia(sessionID: sessionID)
         }
     }
 
@@ -212,6 +219,7 @@ final class Recorder: NSObject, ObservableObject {
         #endif
 
         let continuity = RecordingAudioContinuity(expectsStreaming: false)
+        scheduleSystemMute(for: continuity)
         let handle = beginStartRecording(
             toOutputFile: url,
             continuity: continuity
@@ -254,10 +262,12 @@ final class Recorder: NSObject, ObservableObject {
 
         audioTaskCoordinator.restoreAudio(
             unmute: { [mediaController] in
-                await mediaController.unmuteSystemAudio()
+                guard let sessionID = stoppingContinuity?.sessionID else { return }
+                await mediaController.unmuteSystemAudio(sessionID: sessionID)
             },
             resume: { [playbackController] in
-                await playbackController.resumeMedia()
+                guard let sessionID = stoppingContinuity?.sessionID else { return }
+                await playbackController.resumeMedia(sessionID: sessionID)
             }
         )
     }
