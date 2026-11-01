@@ -1,6 +1,6 @@
 import Foundation
 import os
-import Zip
+import ZIPFoundation
 import SwiftUI
 import Atomics
 
@@ -66,6 +66,53 @@ private final class DownloadProgressPublicationGate: @unchecked Sendable {
         lastUpdateTime = time
         lastProgressValue = progress
         return true
+    }
+}
+
+enum CoreMLArchiveEntryKind: Equatable {
+    case file
+    case directory
+    case symbolicLink
+}
+
+struct CoreMLArchiveEntryPolicy {
+    static let maximumEntrySize: UInt64 = 8 * 1_024 * 1_024 * 1_024
+    static let maximumTotalSize: UInt64 = 16 * 1_024 * 1_024 * 1_024
+    static let maximumEntryCount = 10_000
+
+    private(set) var entryCount = 0
+    private(set) var declaredSize: UInt64 = 0
+
+    mutating func accept(
+        path: String,
+        kind: CoreMLArchiveEntryKind,
+        uncompressedSize: UInt64
+    ) -> Bool {
+        guard kind != .symbolicLink,
+              Self.isSafeRelativePath(path),
+              entryCount < Self.maximumEntryCount,
+              uncompressedSize <= Self.maximumEntrySize,
+              declaredSize <= Self.maximumTotalSize,
+              uncompressedSize <= Self.maximumTotalSize - declaredSize,
+              kind != .directory || uncompressedSize == 0 else {
+            return false
+        }
+        entryCount += 1
+        declaredSize += uncompressedSize
+        return true
+    }
+
+    static func isSafeRelativePath(_ path: String) -> Bool {
+        guard !path.isEmpty,
+              !path.hasPrefix("/"),
+              !path.contains("\\"),
+              !path.utf8.contains(0) else {
+            return false
+        }
+        let normalized = path.hasSuffix("/") ? String(path.dropLast()) : path
+        guard !normalized.isEmpty else { return false }
+        let components = normalized.split(separator: "/", omittingEmptySubsequences: false)
+        return components.allSatisfy { !$0.isEmpty && $0 != "." && $0 != ".." }
     }
 }
 
@@ -340,47 +387,171 @@ class WhisperModelManager: ObservableObject {
     }
 
     private func unzipAndSetupCoreMLModel(for model: WhisperModelFile, zipPath: URL, progressKey: String) async throws -> WhisperModelFile {
-        let coreMLDestination = modelsDirectory.appendingPathComponent("\(model.name)-encoder.mlmodelc")
-
-        try? FileManager.default.removeItem(at: coreMLDestination)
-        try await unzipCoreMLFile(zipPath, to: modelsDirectory)
-        return try verifyAndCleanupCoreMLFiles(model, coreMLDestination, zipPath, progressKey)
-    }
-
-    private func unzipCoreMLFile(_ zipPath: URL, to destination: URL) async throws {
-        let finished = ManagedAtomic(false)
-
-        return try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-            func finishOnce(_ result: Result<Void, Error>) {
-                if finished.exchange(true, ordering: .acquiring) == false {
-                    continuation.resume(with: result)
-                }
-            }
-
-            do {
-                try FileManager.default.createDirectory(at: destination, withIntermediateDirectories: true)
-                try Zip.unzipFile(zipPath, destination: destination, overwrite: true, password: nil)
-                finishOnce(.success(()))
-            } catch {
-                finishOnce(.failure(error))
-            }
+        defer { try? FileManager.default.removeItem(at: zipPath) }
+        let encoderDirectoryName = "\(model.name)-encoder.mlmodelc"
+        let modelsDirectory = modelsDirectory
+        let extraction = Task.detached(priority: .utility) {
+            try Self.extractCoreMLArchive(
+                zipPath,
+                encoderDirectoryName: encoderDirectoryName,
+                into: modelsDirectory
+            )
         }
+        let destination = try await withTaskCancellationHandler {
+            try await extraction.value
+        } onCancel: {
+            extraction.cancel()
+        }
+
+        var installedModel = model
+        installedModel.coreMLEncoderURL = destination
+        downloadProgress.removeValue(forKey: progressKey)
+        return installedModel
     }
 
-    private func verifyAndCleanupCoreMLFiles(_ model: WhisperModelFile, _ destination: URL, _ zipPath: URL, _ progressKey: String) throws -> WhisperModelFile {
-        var model = model
-
-        var isDirectory: ObjCBool = false
-        guard FileManager.default.fileExists(atPath: destination.path, isDirectory: &isDirectory), isDirectory.boolValue else {
-            try? FileManager.default.removeItem(at: zipPath)
+    nonisolated private static func extractCoreMLArchive(
+        _ archiveURL: URL,
+        encoderDirectoryName: String,
+        into modelsDirectory: URL
+    ) throws -> URL {
+        guard CoreMLArchiveEntryPolicy.isSafeRelativePath(encoderDirectoryName),
+              !encoderDirectoryName.contains("/") else {
             throw VoiceInkEngineError.unzipFailed
         }
 
-        try? FileManager.default.removeItem(at: zipPath)
-        model.coreMLEncoderURL = destination
-        self.downloadProgress.removeValue(forKey: progressKey)
+        let fileManager = FileManager.default
+        let stagingDirectory = modelsDirectory.appendingPathComponent(
+            ".coreml-staging-\(UUID().uuidString)",
+            isDirectory: true
+        )
+        try fileManager.createDirectory(
+            at: stagingDirectory,
+            withIntermediateDirectories: true,
+            attributes: [.posixPermissions: 0o700]
+        )
+        defer { try? fileManager.removeItem(at: stagingDirectory) }
 
-        return model
+        let archive = try Archive(url: archiveURL, accessMode: .read)
+        var policy = CoreMLArchiveEntryPolicy()
+        var extractedSize: UInt64 = 0
+        var extractedPaths = Set<String>()
+
+        for entry in archive {
+            try Task.checkCancellation()
+            let kind: CoreMLArchiveEntryKind
+            switch entry.type {
+            case .file:
+                kind = .file
+            case .directory:
+                kind = .directory
+            case .symlink:
+                kind = .symbolicLink
+            @unknown default:
+                throw VoiceInkEngineError.unzipFailed
+            }
+
+            let declaredSize = UInt64(entry.uncompressedSize)
+            guard policy.accept(
+                path: entry.path,
+                kind: kind,
+                uncompressedSize: declaredSize
+            ) else {
+                throw VoiceInkEngineError.unzipFailed
+            }
+
+            let normalizedPath = entry.path.hasSuffix("/")
+                ? String(entry.path.dropLast())
+                : entry.path
+            guard extractedPaths.insert(normalizedPath).inserted else {
+                throw VoiceInkEngineError.unzipFailed
+            }
+            let destination = stagingDirectory.appendingPathComponent(normalizedPath)
+            guard isContained(destination, in: stagingDirectory) else {
+                throw VoiceInkEngineError.unzipFailed
+            }
+
+            let checksum: CRC32
+            switch kind {
+            case .directory:
+                try fileManager.createDirectory(
+                    at: destination,
+                    withIntermediateDirectories: true,
+                    attributes: [.posixPermissions: 0o700]
+                )
+                checksum = entry.checksum
+            case .symbolicLink:
+                throw VoiceInkEngineError.unzipFailed
+            case .file:
+                try fileManager.createDirectory(
+                    at: destination.deletingLastPathComponent(),
+                    withIntermediateDirectories: true,
+                    attributes: [.posixPermissions: 0o700]
+                )
+                guard !fileManager.fileExists(atPath: destination.path),
+                      fileManager.createFile(
+                        atPath: destination.path,
+                        contents: nil,
+                        attributes: [.posixPermissions: 0o600]
+                      ) else {
+                    throw VoiceInkEngineError.unzipFailed
+                }
+
+                let output = try FileHandle(forWritingTo: destination)
+                defer { try? output.close() }
+                var entrySize: UInt64 = 0
+                checksum = try archive.extract(entry) { data in
+                    try Task.checkCancellation()
+                    let chunkSize = UInt64(data.count)
+                    guard entrySize <= declaredSize,
+                          chunkSize <= declaredSize - entrySize,
+                          entrySize <= CoreMLArchiveEntryPolicy.maximumEntrySize,
+                          chunkSize <= CoreMLArchiveEntryPolicy.maximumEntrySize - entrySize,
+                          extractedSize <= CoreMLArchiveEntryPolicy.maximumTotalSize,
+                          chunkSize <= CoreMLArchiveEntryPolicy.maximumTotalSize - extractedSize else {
+                        throw VoiceInkEngineError.unzipFailed
+                    }
+                    try output.write(contentsOf: data)
+                    entrySize += chunkSize
+                    extractedSize += chunkSize
+                }
+                guard entrySize == declaredSize else {
+                    throw VoiceInkEngineError.unzipFailed
+                }
+            }
+            guard checksum == entry.checksum else {
+                throw Archive.ArchiveError.invalidCRC32
+            }
+        }
+
+        let stagedEncoder = stagingDirectory.appendingPathComponent(
+            encoderDirectoryName,
+            isDirectory: true
+        )
+        let values = try stagedEncoder.resourceValues(
+            forKeys: [.isDirectoryKey, .isSymbolicLinkKey]
+        )
+        guard values.isDirectory == true,
+              values.isSymbolicLink != true,
+              !(try fileManager.contentsOfDirectory(atPath: stagedEncoder.path)).isEmpty else {
+            throw VoiceInkEngineError.unzipFailed
+        }
+        try Task.checkCancellation()
+
+        let destination = modelsDirectory.appendingPathComponent(
+            encoderDirectoryName,
+            isDirectory: true
+        )
+        if fileManager.fileExists(atPath: destination.path) {
+            _ = try fileManager.replaceItemAt(destination, withItemAt: stagedEncoder)
+        } else {
+            try fileManager.moveItem(at: stagedEncoder, to: destination)
+        }
+        return destination
+    }
+
+    nonisolated private static func isContained(_ candidate: URL, in directory: URL) -> Bool {
+        let root = directory.standardizedFileURL.path + "/"
+        return candidate.standardizedFileURL.path.hasPrefix(root)
     }
 
     private func shouldWarmup(_ model: WhisperModel) -> Bool {

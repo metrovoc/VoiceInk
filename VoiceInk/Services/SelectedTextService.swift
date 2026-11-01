@@ -2,7 +2,6 @@ import Foundation
 import AppKit
 import ApplicationServices
 import os
-import SelectedTextKit
 
 /// Selected-text capture is a side lane. AX tree traversal and AppleScript
 /// execution run on detached executors; only pasteboard access and the final
@@ -27,12 +26,12 @@ enum SelectedTextService {
     @MainActor
     private final class PasteboardCopyTransaction {
         private let pasteboard = NSPasteboard.general
-        private let originalItems: [NSPasteboardItem]
+        private let originalContents: PasteboardSnapshot
         private let initialChangeCount: Int
         private var didRestore = false
 
         init() {
-            originalItems = pasteboard.backupItems()
+            originalContents = PasteboardSnapshot(pasteboard: pasteboard)
             initialChangeCount = pasteboard.changeCount
         }
 
@@ -46,10 +45,7 @@ enum SelectedTextService {
         func restore() {
             guard !didRestore else { return }
             didRestore = true
-            pasteboard.clearContents()
-            if !originalItems.isEmpty {
-                pasteboard.writeObjects(originalItems)
-            }
+            originalContents.restore(to: pasteboard)
         }
     }
 
@@ -68,23 +64,6 @@ enum SelectedTextService {
             normalized(captureSelectedTextByAccessibility(processID: target.processID))
         }).value {
             return accessibilityText
-        }
-
-        if let bundleIdentifier = target.bundleIdentifier,
-           AppleScriptManager.shared.isBrowserSupportingAppleScript(bundleIdentifier) {
-            do {
-                if let appleScriptText = try await Task.detached(priority: .utility, operation: {
-                    normalized(
-                        try await AppleScriptManager.shared.getSelectedTextFromBrowser(bundleIdentifier)
-                    )
-                }).value {
-                    return appleScriptText
-                }
-            } catch {
-                logger.debug(
-                    "AppleScript selected-text capture failed: \(error, privacy: .public)"
-                )
-            }
         }
 
         return await captureSelectedTextByMenuAction(processID: target.processID)

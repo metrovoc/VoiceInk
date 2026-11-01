@@ -2,10 +2,15 @@ import Foundation
 
 // Safe to delete once all users have updated past this version.
 enum StreamingKeysMigration {
-    static func run() {
-        let defaults = UserDefaults.standard
-        guard !defaults.bool(forKey: "streaming-keys-migrated") else { return }
+    static func run(in defaults: UserDefaults = .standard) {
+        if !defaults.bool(forKey: "streaming-keys-migrated") {
+            migrateLegacyStreamingKeys(in: defaults)
+            defaults.set(true, forKey: "streaming-keys-migrated")
+        }
+        migrateVoxtral3SelectionsIfNeeded(in: defaults)
+    }
 
+    private static func migrateLegacyStreamingKeys(in defaults: UserDefaults) {
         let legacyStreamingMappings: [(old: String, new: [String])] = [
             ("parakeet-streaming-enabled", [
                 "streaming-enabled-parakeet-tdt-0.6b-v2",
@@ -53,6 +58,50 @@ enum StreamingKeysMigration {
             }
         }
 
-        defaults.set(true, forKey: "streaming-keys-migrated")
+    }
+
+    private static func migrateVoxtral3SelectionsIfNeeded(in defaults: UserDefaults) {
+        let migrationKey = "mistral-voxtral-3-migrated"
+        guard !defaults.bool(forKey: migrationKey) else { return }
+
+        let legacyModels: Set<String> = [
+            "voxtral-mini-latest",
+            "voxtral-mini-transcribe-realtime-2602",
+        ]
+        let batchModel = "voxtral-mini-transcribe-3-0"
+        let realtimeModel = "voxtral-mini-transcribe-realtime-3-0"
+        let globalSelection = defaults.string(forKey: "CurrentTranscriptionModel")
+
+        if let globalSelection, legacyModels.contains(globalSelection) {
+            defaults.set(realtimeModel, forKey: "CurrentTranscriptionModel")
+        }
+
+        for modeKey in ["modeConfigurationsV2", "powerModeConfigurationsV2"] {
+            guard let data = defaults.data(forKey: modeKey),
+                  var configurations = (try? JSONSerialization.jsonObject(with: data)) as? [[String: Any]] else {
+                continue
+            }
+
+            var changed = false
+            for index in configurations.indices {
+                let selectedModel = configurations[index]["selectedTranscriptionModelName"] as? String
+                    ?? configurations[index]["selectedWhisperModel"] as? String
+                    ?? globalSelection
+                guard let selectedModel, legacyModels.contains(selectedModel) else { continue }
+
+                let realtimeEnabled = configurations[index]["isRealtimeTranscriptionEnabled"] as? Bool ?? true
+                configurations[index]["selectedTranscriptionModelName"] = realtimeEnabled
+                    ? realtimeModel
+                    : batchModel
+                changed = true
+            }
+
+            if changed,
+               let migrated = try? JSONSerialization.data(withJSONObject: configurations) {
+                defaults.set(migrated, forKey: modeKey)
+            }
+        }
+
+        defaults.set(true, forKey: migrationKey)
     }
 }

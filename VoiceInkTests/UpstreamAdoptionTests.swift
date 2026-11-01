@@ -195,6 +195,192 @@ struct UpstreamAdoptionTests {
         )
     }
 
+    @Test func manualInputChannelOverridesAutomaticStereoSelection() {
+        #expect(
+            AudioInputChannelSelection.resolve(
+                deviceChannelCount: 8,
+                preferredStereoChannels: [3, 4],
+                selectedChannels: [6]
+            ).deviceChannelIndices == [5]
+        )
+        #expect(
+            AudioInputChannelSelection.resolve(
+                deviceChannelCount: 8,
+                preferredStereoChannels: [3, 4],
+                selectedChannels: [9]
+            ).deviceChannelIndices == [2, 3]
+        )
+    }
+
+    @Test func audioCaptureRecoveryDetectsStaleFormatsAndShortCapture() {
+        #expect(
+            AudioCaptureRecoveryPolicy.capturedTooLittleAudio(
+                frameCount: 2_399,
+                sampleRate: 16_000
+            )
+        )
+        #expect(
+            !AudioCaptureRecoveryPolicy.capturedTooLittleAudio(
+                frameCount: 2_400,
+                sampleRate: 16_000
+            )
+        )
+        #expect(
+            AudioCaptureRecoveryPolicy.preparedFormatMatches(
+                preparedSampleRate: 48_000,
+                preparedChannelCount: 2,
+                currentSampleRate: 48_000,
+                currentChannelCount: 2,
+                currentFrameCapacity: 512,
+                allocatedFrameCapacity: 4_096
+            )
+        )
+        #expect(
+            !AudioCaptureRecoveryPolicy.preparedFormatMatches(
+                preparedSampleRate: 48_000,
+                preparedChannelCount: 2,
+                currentSampleRate: 44_100,
+                currentChannelCount: 2,
+                currentFrameCapacity: 512,
+                allocatedFrameCapacity: 4_096
+            )
+        )
+        #expect(
+            !AudioCaptureRecoveryPolicy.preparedFormatMatches(
+                preparedSampleRate: 48_000,
+                preparedChannelCount: 2,
+                currentSampleRate: 48_000,
+                currentChannelCount: 2,
+                currentFrameCapacity: 8_192,
+                allocatedFrameCapacity: 4_096
+            )
+        )
+    }
+
+    @Test func directTypingPlanPreservesUnicodeScalarsAndSeparatesControls() throws {
+        let chunks = try #require(
+            TextTypingPlan.unicodeChunks(for: "ab🙂\ncd\t", maximumUTF16Units: 4)
+        )
+        let strings = chunks.map { String(utf16CodeUnits: $0, count: $0.count) }
+
+        #expect(strings == ["ab🙂", "\r", "cd", "\t"])
+        #expect(TextTypingPlan.unicodeChunks(for: "unsafe\u{0007}") == nil)
+    }
+
+    @Test func remoteTypingPlanFoldsTypographyAndReportsOmissions() {
+        let available = Set("Cafe -'hello\n".map { $0 })
+        let result = TextTypingPlan.physicalKeyboardText(
+            for: "Café — hello 你好",
+            canType: { available.contains($0) }
+        )
+
+        #expect(result.text == "Cafe - hello ")
+        #expect(result.omittedCharacters)
+    }
+
+    @Test func nonClipboardTypingMethodsPreserveClipboard() {
+        #expect(PasteMethod.standard.usesClipboard)
+        #expect(PasteMethod.appleScript.usesClipboard)
+        #expect(!PasteMethod.directTyping.usesClipboard)
+        #expect(!PasteMethod.remoteTyping.usesClipboard)
+    }
+
+    @Test func coreMLArchivePolicyRejectsTraversalLinksAndOversizedEntries() {
+        var accepted = CoreMLArchiveEntryPolicy()
+        let acceptedFile = accepted.accept(
+            path: "model.mlmodelc/data.bin",
+            kind: .file,
+            uncompressedSize: 128
+        )
+        let acceptedDirectory = accepted.accept(
+            path: "model.mlmodelc/weights/",
+            kind: .directory,
+            uncompressedSize: 0
+        )
+        #expect(acceptedFile)
+        #expect(acceptedDirectory)
+
+        var traversal = CoreMLArchiveEntryPolicy()
+        let acceptedTraversal = traversal.accept(
+            path: "../outside",
+            kind: .file,
+            uncompressedSize: 1
+        )
+        #expect(!acceptedTraversal)
+
+        var link = CoreMLArchiveEntryPolicy()
+        let acceptedLink = link.accept(
+            path: "model.mlmodelc/link",
+            kind: .symbolicLink,
+            uncompressedSize: 1
+        )
+        #expect(!acceptedLink)
+
+        var oversized = CoreMLArchiveEntryPolicy()
+        let acceptedOversizedFile = oversized.accept(
+            path: "model.mlmodelc/data.bin",
+            kind: .file,
+            uncompressedSize: CoreMLArchiveEntryPolicy.maximumEntrySize + 1
+        )
+        #expect(!acceptedOversizedFile)
+    }
+
+    @Test func mistralCatalogIncludesSeparateVoxtral3Models() throws {
+        let models = MistralProvider().models
+        let realtime = try #require(
+            models.first { $0.name == "voxtral-mini-transcribe-realtime-3-0" }
+        )
+
+        #expect(models.contains { $0.name == "voxtral-small-transcribe-3-0" })
+        #expect(models.contains { $0.name == "voxtral-mini-transcribe-3-0" })
+        #expect(realtime.supportsStreaming)
+        #expect(realtime.supportedLanguages["tl"] != nil)
+    }
+
+    @Test func voxtralMigrationPreservesPerModeRealtimeChoice() throws {
+        let suiteName = "VoiceInkTests.VoxtralMigration.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        defaults.set(true, forKey: "streaming-keys-migrated")
+        defaults.set("voxtral-mini-latest", forKey: "CurrentTranscriptionModel")
+        let modes: [[String: Any]] = [
+            [
+                "selectedTranscriptionModelName": "voxtral-mini-latest",
+                "isRealtimeTranscriptionEnabled": false,
+            ],
+            [
+                "selectedWhisperModel": "voxtral-mini-transcribe-realtime-2602",
+                "isRealtimeTranscriptionEnabled": true,
+            ],
+        ]
+        defaults.set(
+            try JSONSerialization.data(withJSONObject: modes),
+            forKey: "modeConfigurationsV2"
+        )
+
+        StreamingKeysMigration.run(in: defaults)
+
+        #expect(
+            defaults.string(forKey: "CurrentTranscriptionModel")
+                == "voxtral-mini-transcribe-realtime-3-0"
+        )
+        let migratedData = try #require(defaults.data(forKey: "modeConfigurationsV2"))
+        let migrated = try #require(
+            try JSONSerialization.jsonObject(with: migratedData) as? [[String: Any]]
+        )
+        #expect(migrated[0]["selectedTranscriptionModelName"] as? String == "voxtral-mini-transcribe-3-0")
+        #expect(migrated[1]["selectedTranscriptionModelName"] as? String == "voxtral-mini-transcribe-realtime-3-0")
+    }
+
+    @Test func enhancementCatalogIncludesNewAnthropicAndMistralModels() {
+        #expect(AIProvider.anthropic.defaultModel == "claude-sonnet-5-5")
+        #expect(AIProvider.anthropic.availableModels.prefix(2) == [
+            "claude-sonnet-5-5",
+            "claude-haiku-5-5",
+        ])
+        #expect(AIProvider.mistral.availableModels.contains("mistral-large-4"))
+    }
+
     @MainActor
     @Test func modeResolutionDoesNotSubstituteFallbackModelForMissingSelection() {
         let fallback = testTranscriptionModel(name: "fallback", displayName: "Fallback")
