@@ -36,6 +36,7 @@ assert_build "26.7.1" "26007001"
 assert_build "26.7.2" "26007002"
 assert_build "26.7.3" "26007003"
 assert_build "26.8.0" "26008000"
+assert_build "26.9.0" "26009000"
 
 assert_greater "26.6.0" "26.4.11"
 assert_greater "26.10.0" "26.6.99"
@@ -49,16 +50,16 @@ fi
 project_file="$script_dir/../VoiceInk.xcodeproj/project.pbxproj"
 expected_marketing_occurrences=2
 expected_build_occurrences=2
-marketing_occurrences="$(grep -c 'MARKETING_VERSION = 26.8.0;' "$project_file")"
-build_occurrences="$(grep -c 'CURRENT_PROJECT_VERSION = 26008000;' "$project_file")"
+marketing_occurrences="$(grep -c 'MARKETING_VERSION = 26.9.0;' "$project_file")"
+build_occurrences="$(grep -c 'CURRENT_PROJECT_VERSION = 26009000;' "$project_file")"
 
 if [ "$marketing_occurrences" -ne "$expected_marketing_occurrences" ]; then
-  echo "Expected both VoiceInk app configurations to use MARKETING_VERSION 26.8.0" >&2
+  echo "Expected both VoiceInk app configurations to use MARKETING_VERSION 26.9.0" >&2
   exit 1
 fi
 
 if [ "$build_occurrences" -ne "$expected_build_occurrences" ]; then
-  echo "Expected both VoiceInk app configurations to use CURRENT_PROJECT_VERSION 26008000" >&2
+  echo "Expected both VoiceInk app configurations to use CURRENT_PROJECT_VERSION 26009000" >&2
   exit 1
 fi
 
