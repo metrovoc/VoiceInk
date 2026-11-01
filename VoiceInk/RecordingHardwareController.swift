@@ -357,7 +357,8 @@ final class RecordingHardwareController: @unchecked Sendable {
                         try coreAudioRecorder.startRecording(
                             toOutputFile: url,
                             deviceID: device.id,
-                            continuity: continuity
+                            continuity: continuity,
+                            selectedInputChannels: self.selectedInputChannels(for: device)
                         ) {
                             !self.startCoordinator.isActive(token)
                         }
@@ -450,9 +451,16 @@ final class RecordingHardwareController: @unchecked Sendable {
 
             let coreAudioRecorder = self.recorderOnQueue()
             coreAudioRecorder.onAudioChunk = self.currentAudioChunkCallback()
-            let wasPrepared = coreAudioRecorder.isPreparedForDevice(device.id)
+            let selectedInputChannels = self.selectedInputChannels(for: device)
+            let wasPrepared = coreAudioRecorder.isPreparedForDevice(
+                device.id,
+                selectedInputChannels: selectedInputChannels
+            )
             do {
-                try coreAudioRecorder.prepare(deviceID: device.id) {
+                try coreAudioRecorder.prepare(
+                    deviceID: device.id,
+                    selectedInputChannels: selectedInputChannels
+                ) {
                     workItem?.isCancelled == true
                 }
                 self.logger.notice("Recorder warm-up finished reason=\(reason, privacy: .public) deviceID=\(device.id, privacy: .public) wasPrepared=\(wasPrepared, privacy: .public) elapsed=\(ProcessInfo.processInfo.systemUptime - startedAt, format: .fixed(precision: 3), privacy: .public)s")
@@ -474,15 +482,22 @@ final class RecordingHardwareController: @unchecked Sendable {
     func isPreparedForCurrentDevice() -> Bool {
         let device = deviceResolver.resolveCurrentInputDevice()
         guard device.id != 0, let recorder = recorderSnapshot() else { return false }
-        return recorder.isPreparedForDevice(device.id)
+        return recorder.isPreparedForDevice(
+            device.id,
+            selectedInputChannels: selectedInputChannels(for: device)
+        )
     }
 
     func switchDevice(to newDeviceID: AudioDeviceID) async throws {
         guard let currentRecorder = recorderSnapshot() else { return }
+        let selectedInputChannels = deviceManager.selectedInputChannels(for: newDeviceID)
         try await withCheckedThrowingContinuation { continuation in
             audioSetupQueue.async {
                 do {
-                    try currentRecorder.switchDevice(to: newDeviceID)
+                    try currentRecorder.switchDevice(
+                        to: newDeviceID,
+                        selectedInputChannels: selectedInputChannels
+                    )
                     continuation.resume()
                 } catch {
                     continuation.resume(throwing: error)
@@ -541,6 +556,14 @@ final class RecordingHardwareController: @unchecked Sendable {
         callbackLock.lock()
         defer { callbackLock.unlock() }
         return audioMeterCallback
+    }
+
+    private func selectedInputChannels(for device: RecordingInputDevice) -> [UInt32]? {
+        guard let uid = device.uid,
+              !deviceManager.isInternalMicrophone(device.id) else {
+            return nil
+        }
+        return UserDefaults.standard.audioInputChannelsByDeviceUID[uid]
     }
 
     private func recorderSnapshot() -> CoreAudioRecorder? {

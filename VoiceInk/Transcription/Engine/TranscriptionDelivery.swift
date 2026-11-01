@@ -154,10 +154,14 @@ final class TranscriptionDelivery {
         SoundManager.shared.playStopSound()
         await actions.dismiss()
 
-        let pasteTask = CursorPaster.startPasteAtCursor(pastedText)
-        _ = await pasteTask.value
-
         let autoSendKey = output.outputMode == .paste ? output.autoSendKey : .none
+        let pasteTask = CursorPaster.startPasteAtCursor(
+            pastedText,
+            autoSendKey: autoSendKey
+        )
+        let pasteResult = await pasteTask.value
+
+        guard pasteResult.didPostPasteCommand else { return }
         if autoSendKey.isEnabled {
             try? await Task.sleep(nanoseconds: 500_000_000)
             CursorPaster.performAutoSend(autoSendKey)

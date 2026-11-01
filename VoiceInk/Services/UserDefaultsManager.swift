@@ -6,6 +6,7 @@ extension UserDefaults {
         static let selectedAudioDeviceUID = "selectedAudioDeviceUID"
         static let selectedAudioDeviceModelUID = "selectedAudioDeviceModelUID"
         static let prioritizedDevices = "prioritizedDevices"
+        static let audioInputChannelsByDeviceUID = "audioInputChannelsByDeviceUID"
     }
 
     var audioInputModeRawValue: String? {
@@ -26,5 +27,19 @@ extension UserDefaults {
     var prioritizedDevicesData: Data? {
         get { data(forKey: Keys.prioritizedDevices) }
         set { setValue(newValue, forKey: Keys.prioritizedDevices) }
+    }
+
+    var audioInputChannelsByDeviceUID: [String: [UInt32]] {
+        get {
+            guard let data = data(forKey: Keys.audioInputChannelsByDeviceUID),
+                  let selections = try? JSONDecoder().decode([String: [UInt32]].self, from: data) else {
+                return [:]
+            }
+            return selections.filter { $0.value.count == 1 }
+        }
+        set {
+            guard let data = try? JSONEncoder().encode(newValue) else { return }
+            setValue(data, forKey: Keys.audioInputChannelsByDeviceUID)
+        }
     }
 }

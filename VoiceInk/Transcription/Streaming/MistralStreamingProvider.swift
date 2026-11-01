@@ -31,7 +31,7 @@ final class MistralStreamingProvider: StreamingTranscriptionProvider, @unchecked
         startEventForwarding()
 
         do {
-            try await client.connect(apiKey: apiKey, model: "voxtral-mini-transcribe-realtime-2602", language: language)
+            try await client.connect(apiKey: apiKey, model: model.name, language: language)
         } catch {
             // Clean up forwarding task on connection failure
             forwardingTask?.cancel()

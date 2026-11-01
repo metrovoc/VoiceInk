@@ -1,6 +1,33 @@
 import SwiftUI
 import AppKit
 
+struct PasteboardSnapshot {
+    private typealias Item = [(NSPasteboard.PasteboardType, Data)]
+    private let items: [Item]
+
+    init(pasteboard: NSPasteboard) {
+        items = (pasteboard.pasteboardItems ?? []).map { item in
+            item.types.compactMap { type in
+                item.data(forType: type).map { (type, $0) }
+            }
+        }
+    }
+
+    @discardableResult
+    func restore(to pasteboard: NSPasteboard) -> Bool {
+        pasteboard.clearContents()
+        guard !items.isEmpty else { return true }
+        let pasteboardItems = items.map { snapshot in
+            let item = NSPasteboardItem()
+            for (type, data) in snapshot {
+                item.setData(data, forType: type)
+            }
+            return item
+        }
+        return pasteboard.writeObjects(pasteboardItems)
+    }
+}
+
 struct ClipboardManager {
     static let pasteSessionType = NSPasteboard.PasteboardType("com.VoiceInk.PasteSession")
     private static let sourceType = NSPasteboard.PasteboardType("org.nspasteboard.source")

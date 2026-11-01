@@ -1,15 +1,5 @@
 {
-  "originHash" : "33e6cda138cafc2cbc0512005e2707acb78baaf346ab1cce2615776c0c686143",
   "pins" : [
-    {
-      "identity" : "axswift",
-      "kind" : "remoteSourceControl",
-      "location" : "https://github.com/tisfeng/AXSwift.git",
-      "state" : {
-        "revision" : "d737b605c99f6e0f6a21448d0836110bd15b7710",
-        "version" : "0.3.7"
-      }
-    },
     {
       "identity" : "fluidaudio",
       "kind" : "remoteSourceControl",
@@ -17,15 +7,6 @@
       "state" : {
         "branch" : "main",
         "revision" : "3c6e79f1d74411cae1f3daf50260dd19a585dc2d"
-      }
-    },
-    {
-      "identity" : "keysender",
-      "kind" : "remoteSourceControl",
-      "location" : "https://github.com/jordanbaird/KeySender",
-      "state" : {
-        "revision" : "99584bf1a03ab600cc44be89a2dcd98b2dbeb9de",
-        "version" : "0.0.5"
       }
     },
     {
@@ -65,15 +46,6 @@
       }
     },
     {
-      "identity" : "selectedtextkit",
-      "kind" : "remoteSourceControl",
-      "location" : "https://github.com/Beingpax/SelectedTextKit.git",
-      "state" : {
-        "branch" : "main",
-        "revision" : "9c51732dd6b6c1dad161762ec3bb8bb73bc82833"
-      }
-    },
-    {
       "identity" : "sparkle",
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/sparkle-project/Sparkle",
@@ -110,14 +82,14 @@
       }
     },
     {
-      "identity" : "zip",
+      "identity" : "zipfoundation",
       "kind" : "remoteSourceControl",
-      "location" : "https://github.com/marmelroy/Zip",
+      "location" : "https://github.com/weichsel/ZIPFoundation.git",
       "state" : {
-        "revision" : "67fa55813b9e7b3b9acee9c0ae501def28746d76",
-        "version" : "2.1.2"
+        "revision" : "22787ffb59de99e5dc1fbfe80b19c97a904ad48d",
+        "version" : "0.9.20"
       }
     }
   ],
-  "version" : 3
+  "version" : 2
 }

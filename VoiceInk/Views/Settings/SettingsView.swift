@@ -145,7 +145,7 @@ struct SettingsView: View {
                     isExpanded: $isRestoreClipboardExpanded,
                     isEnabled: $restoreClipboardAfterPaste,
                     label: "Keep Clipboard Content",
-                    infoMessage: "VoiceInk CE temporarily uses the clipboard to paste transcription. When enabled, it restores your previous clipboard content after the selected delay. When disabled, the pasted transcription stays on your clipboard."
+                    infoMessage: "Default and AppleScript temporarily use the clipboard. Direct and Remote Desktop Typing leave it unchanged."
                 ) {
                     Picker("Restore Delay", selection: $clipboardRestoreDelay) {
                         Text("250ms").tag(0.25)
@@ -157,6 +157,7 @@ struct SettingsView: View {
                         Text("5s").tag(5.0)
                     }
                 }
+                .disabled(PasteMethod(rawValue: pasteMethodRawValue)?.usesClipboard == false)
 
                 Picker(selection: $pasteMethodRawValue) {
                     ForEach(PasteMethod.allCases) { method in
@@ -165,7 +166,7 @@ struct SettingsView: View {
                 } label: {
                     HStack(spacing: 4) {
                         Text("Paste Method")
-                        InfoTip("Default uses simulated Cmd+V key events. AppleScript can help when custom keyboard layouts do not paste correctly.")
+                        InfoTip("Default sends Cmd+V. AppleScript is an alternative for custom layouts. Direct Typing inserts Unicode without the clipboard. Remote Desktop Typing sends physical keys for remote desktops and virtual machines; both computers should use matching layouts.")
                     }
                 }
                 .pickerStyle(.menu)
